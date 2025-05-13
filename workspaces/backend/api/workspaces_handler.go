@@ -43,15 +43,6 @@ func (a *App) GetWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps htt
 	namespace := ps.ByName(NamespacePathParam)
 	workspaceName := ps.ByName(ResourceNamePathParam)
 
-	// validate path parameters
-	var valErrs field.ErrorList
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(NamespacePathParam), namespace)...)
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(ResourceNamePathParam), workspaceName)...)
-	if len(valErrs) > 0 {
-		a.failedValidationResponse(w, r, errMsgPathParamsInvalid, valErrs, nil)
-		return
-	}
-
 	// =========================== AUTH ===========================
 	authPolicies := []*auth.ResourcePolicy{
 		auth.NewResourcePolicy(
@@ -85,17 +76,6 @@ func (a *App) GetWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps htt
 
 func (a *App) GetWorkspacesHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	namespace := ps.ByName(NamespacePathParam)
-
-	// validate path parameters
-	// NOTE: namespace is optional, if not provided, we list all workspaces across all namespaces
-	var valErrs field.ErrorList
-	if namespace != "" {
-		valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(NamespacePathParam), namespace)...)
-	}
-	if len(valErrs) > 0 {
-		a.failedValidationResponse(w, r, errMsgPathParamsInvalid, valErrs, nil)
-		return
-	}
 
 	// =========================== AUTH ===========================
 	authPolicies := []*auth.ResourcePolicy{
@@ -132,14 +112,6 @@ func (a *App) GetWorkspacesHandler(w http.ResponseWriter, r *http.Request, ps ht
 func (a *App) CreateWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	namespace := ps.ByName(NamespacePathParam)
 
-	// validate path parameters
-	var valErrs field.ErrorList
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(NamespacePathParam), namespace)...)
-	if len(valErrs) > 0 {
-		a.failedValidationResponse(w, r, errMsgPathParamsInvalid, valErrs, nil)
-		return
-	}
-
 	// validate the Content-Type header
 	if success := a.ValidateContentType(w, r, "application/json"); !success {
 		return
@@ -153,6 +125,7 @@ func (a *App) CreateWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps 
 		return
 	}
 
+	var valErrs field.ErrorList
 	// validate the request body
 	dataPath := field.NewPath("data")
 	if bodyEnvelope.Data == nil {
@@ -210,15 +183,6 @@ func (a *App) CreateWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps 
 func (a *App) DeleteWorkspaceHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	namespace := ps.ByName(NamespacePathParam)
 	workspaceName := ps.ByName(ResourceNamePathParam)
-
-	// validate path parameters
-	var valErrs field.ErrorList
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(NamespacePathParam), namespace)...)
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(ResourceNamePathParam), workspaceName)...)
-	if len(valErrs) > 0 {
-		a.failedValidationResponse(w, r, errMsgPathParamsInvalid, valErrs, nil)
-		return
-	}
 
 	// =========================== AUTH ===========================
 	authPolicies := []*auth.ResourcePolicy{

@@ -23,10 +23,8 @@ import (
 	"github.com/julienschmidt/httprouter"
 	kubefloworgv1beta1 "github.com/kubeflow/notebooks/workspaces/controller/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/auth"
-	"github.com/kubeflow/notebooks/workspaces/backend/internal/helper"
 	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspacekinds"
 	repository "github.com/kubeflow/notebooks/workspaces/backend/internal/repositories/workspacekinds"
 )
@@ -37,14 +35,6 @@ type WorkspaceKindEnvelope Envelope[models.WorkspaceKind]
 
 func (a *App) GetWorkspaceKindHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	name := ps.ByName(ResourceNamePathParam)
-
-	// validate path parameters
-	var valErrs field.ErrorList
-	valErrs = append(valErrs, helper.ValidateFieldIsDNS1123Subdomain(field.NewPath(ResourceNamePathParam), name)...)
-	if len(valErrs) > 0 {
-		a.failedValidationResponse(w, r, errMsgPathParamsInvalid, valErrs, nil)
-		return
-	}
 
 	// =========================== AUTH ===========================
 	authPolicies := []*auth.ResourcePolicy{

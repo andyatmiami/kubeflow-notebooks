@@ -113,5 +113,5 @@ func (a *App) Routes() http.Handler {
 	// swagger
 	router.GET(SwaggerPath, a.GetSwaggerHandler)
 
-	return a.recoverPanic(a.enableCORS(router))
+	return a.recoverPanic(a.enableCORS(a.validatePathParams(router)))
 }
