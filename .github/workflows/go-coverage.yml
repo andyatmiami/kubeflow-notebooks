@@ -5,7 +5,7 @@ on:
     paths:
       - 'workspaces/backend/**'
     branches:
-      - notebook-v2
+      - notebooks-v2
 
 permissions:
   contents: write
