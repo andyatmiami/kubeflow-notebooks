@@ -16,6 +16,8 @@ limitations under the License.
 
 package health_check
 
+// trigger gha check to establish baseline coverage
+
 import (
 	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/health_check"
 )
