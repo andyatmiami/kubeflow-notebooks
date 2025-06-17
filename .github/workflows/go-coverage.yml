@@ -35,7 +35,8 @@ jobs:
 
       - name: Run Tests with Coverage
         run: |
-          go test ./api/... -coverprofile=coverage.baseline
+          make test
+          mv cover.out coverage.baseline
 
       - name: Commit backend coverage file
         run: |
