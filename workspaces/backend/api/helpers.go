@@ -97,5 +97,5 @@ func (a *App) LocationGetWorkspace(namespace, name string) string {
 
 // DummyFunc is a dummy function to trigger a coverage check.
 func (a *App) DummyFunc() string {
-	return "delete me"
+	return "delete me 1"
 }
