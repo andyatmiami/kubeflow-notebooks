@@ -17,7 +17,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: workspaces/backend  # 👈 where your go.mod is
+        working-directory: workspaces/backend
 
     steps:
       - name: Checkout Code
@@ -26,9 +26,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: ./go.mod
+          go-version-file: workspaces/backend/go.mod
           check-latest: true
-          cache-dependency-path: ./go.sum
+          cache-dependency-path: workspaces/backend/go.sum
 
       - name: Download Dependencies
         run: go mod download
