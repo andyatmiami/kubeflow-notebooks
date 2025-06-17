@@ -94,3 +94,8 @@ func (a *App) LocationGetWorkspace(namespace, name string) string {
 	path = strings.Replace(path, ":"+ResourceNamePathParam, name, 1)
 	return path
 }
+
+// DummyFunc is a dummy function to trigger a coverage check.
+func (a *App) DummyFunc() string {
+	return "delete me"
+}
