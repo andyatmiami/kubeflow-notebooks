@@ -214,3 +214,8 @@ func (r *WorkspaceRepository) DeleteWorkspace(ctx context.Context, namespace, wo
 
 	return nil
 }
+
+// Delete me
+func (r *WorkspaceRepository) DummyFunc() bool {
+	return true
+}
