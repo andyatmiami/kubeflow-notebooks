@@ -16,6 +16,17 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
+# CONTAINER_BUILD_ARGS defines additional arguments to pass to the container build command
+# (e.g., --no-cache for forcing rebuilds without using cache)
+CONTAINER_BUILD_ARGS ?=
+
+ifeq ($(CONTAINER_TOOL),podman)
+  TARGETOS  ?= linux
+  TARGETARCH ?= $(shell podman version --format '{{.Server.OsArch}}' | cut -d'/' -f2)
+  export TARGETOS
+  export TARGETARCH
+endif
+
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
@@ -102,7 +113,11 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build \
+		--build-arg TARGETOS=$(TARGETOS) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		$(CONTAINER_BUILD_ARGS) \
+		-t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
