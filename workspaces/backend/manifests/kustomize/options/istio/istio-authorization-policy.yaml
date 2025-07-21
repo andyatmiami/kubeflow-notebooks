@@ -8,5 +8,6 @@ spec:
     matchLabels:
       app.kubernetes.io/name: kubeflow-notebooks
       app.kubernetes.io/component: backend
+      app.kubernetes.io/managed-by: kustomize
   rules:
   - {}

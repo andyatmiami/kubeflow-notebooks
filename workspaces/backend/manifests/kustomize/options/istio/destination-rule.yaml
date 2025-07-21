@@ -3,7 +3,7 @@ kind: DestinationRule
 metadata:
   name: backend
 spec:
-  host: nb-backend.kubeflow-system.svc.cluster.local
+  host: nb-backend.workspace-controller-system.svc.cluster.local
   trafficPolicy:
     tls:
-      mode: ISTIO_MUTUAL
+      mode: DISABLE

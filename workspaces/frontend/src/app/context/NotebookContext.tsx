@@ -19,7 +19,7 @@ interface NotebookContextProviderProps {
 }
 
 export const NotebookContextProvider: React.FC<NotebookContextProviderProps> = ({ children }) => {
-  const hostPath = `/api/${BFF_API_VERSION}`;
+  const hostPath = `/workspaces/api/${BFF_API_VERSION}`;
 
   const [apiState, refreshAPIState] = useNotebookAPIState(hostPath);
 

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base
+
+components:
+- ../common/naming-component
+
+replacements:
+- source:
+    kind: ServiceAccount
+    name: backend
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ClusterRoleBinding
+      name: backend-clusterrolebinding
+    fieldPaths:
+    - subjects.[kind=ServiceAccount].namespace

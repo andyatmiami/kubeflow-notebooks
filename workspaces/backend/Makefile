@@ -82,7 +82,7 @@ swag: SWAGGER
 build: fmt vet swag ## Build backend binary.
 	go build -o bin/backend cmd/main.go
 
-.PHONY: run 
+.PHONY: run
 run: fmt vet swag ## Run a backend from your host.
 	go run ./cmd/main.go --port=$(PORT)
 
@@ -153,14 +153,16 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 
 ##@ deployment
 
+OVERLAY_TARGET ?= vanilla
+
 .PHONY: deploy
 deploy: kustomize ## Deploy backend to the K8s cluster specified in ~/.kube/config.
-	cd manifests/kustomize/base && $(KUSTOMIZE) edit set image nb-backend=${IMG}
-	$(KUSTOMIZE) build manifests/kustomize/base | $(KUBECTL) apply -f -
+	cd manifests/kustomize/options/$(OVERLAY_TARGET) && $(KUSTOMIZE) edit set image nb-backend=${IMG}
+	$(KUSTOMIZE) build manifests/kustomize/options/$(OVERLAY_TARGET) | $(KUBECTL) apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy backend from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build manifests/kustomize/base | $(KUBECTL) delete --ignore-not-found=true -f -
+	$(KUSTOMIZE) build manifests/kustomize/options/$(OVERLAY_TARGET) | $(KUBECTL) delete --ignore-not-found=true -f -
 
 
 ##@ Dependencies

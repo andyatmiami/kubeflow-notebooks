@@ -12,19 +12,9 @@ components:
 
 replacements:
 - source:
-    fieldPath: metadata.namespace
-    kind: ServiceAccount
-    name: backend
-  targets:
-  - fieldPaths:
-    - subjects.[kind=ServiceAccount].namespace
-    select:
-      kind: ClusterRoleBinding
-      name: backend-clusterrolebinding
-- source:
     fieldPath: metadata.name
     kind: Service
-    name: backend
+    name: frontend
     version: v1
   targets:
   - fieldPaths:
@@ -34,7 +24,16 @@ replacements:
     select:
       group: networking.istio.io
       kind: VirtualService
-      name: backend
+      name: frontend
+      version: v1alpha3
+  - fieldPaths:
+    - spec.http.1.route.0.destination.host
+    options:
+      delimiter: .
+    select:
+      group: networking.istio.io
+      kind: VirtualService
+      name: frontend
       version: v1alpha3
   - fieldPaths:
     - spec.host
@@ -43,12 +42,12 @@ replacements:
     select:
       group: networking.istio.io
       kind: DestinationRule
-      name: backend
+      name: frontend
       version: v1alpha3
 - source:
     fieldPath: metadata.namespace
     kind: Service
-    name: backend
+    name: frontend
     version: v1
   targets:
   - fieldPaths:
@@ -59,7 +58,17 @@ replacements:
     select:
       group: networking.istio.io
       kind: VirtualService
-      name: backend
+      name: frontend
+      version: v1alpha3
+  - fieldPaths:
+    - spec.http.1.route.0.destination.host
+    options:
+      delimiter: .
+      index: 1
+    select:
+      group: networking.istio.io
+      kind: VirtualService
+      name: frontend
       version: v1alpha3
   - fieldPaths:
     - spec.host
@@ -69,12 +78,12 @@ replacements:
     select:
       group: networking.istio.io
       kind: DestinationRule
-      name: backend
+      name: frontend
       version: v1alpha3
 - source:
-    fieldPath: spec.ports.[name=http-backend].port
+    fieldPath: spec.ports.[name=http-frontend].port
     kind: Service
-    name: backend
+    name: frontend
     version: v1
   targets:
   - fieldPaths:
@@ -82,5 +91,12 @@ replacements:
     select:
       group: networking.istio.io
       kind: VirtualService
-      name: backend
+      name: frontend
+      version: v1alpha3
+  - fieldPaths:
+    - spec.http.1.route.0.destination.port.number
+    select:
+      group: networking.istio.io
+      kind: VirtualService
+      name: frontend
       version: v1alpha3

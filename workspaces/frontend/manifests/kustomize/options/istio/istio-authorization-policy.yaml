@@ -6,6 +6,8 @@ spec:
   action: ALLOW
   selector:
     matchLabels:
-        app.kubernetes.io/component: workspace-frontend
+      app.kubernetes.io/name: kubeflow-notebooks
+      app.kubernetes.io/component: frontend
+      app.kubernetes.io/managed-by: kustomize
   rules:
   - {}

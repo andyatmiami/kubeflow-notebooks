@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+namespace: workspace-controller-system
+namePrefix: nb-
+
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kubeflow-notebooks

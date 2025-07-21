@@ -4,15 +4,17 @@ metadata:
   name: backend
 spec:
   gateways:
-  - kubeflow-gateway
+  - kubeflow/kubeflow-gateway
   hosts:
   - '*'
   http:
   - match:
     - uri:
         prefix: /workspaces/api/
+    rewrite:
+      uri: /api/
     route:
     - destination:
-        host: nb-backend.kubeflow-system.svc.cluster.local
+        host: nb-backend.workspace-controller-system.svc.cluster.local
         port:
           number: 4000
