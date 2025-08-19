@@ -747,7 +747,7 @@ build_and_deploy_backend() {
 
     # Validate backend deployment
     log_info "Validating backend deployment..."
-    indent_output kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=workspaces-backend -n kubeflow-workspaces --timeout=300s
+    indent_output kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=api,app.kubernetes.io/name=workspaces-backend -n kubeflow-workspaces --timeout=300s
     log_success "Backend built, deployed, and validated"
 }
 
@@ -803,7 +803,7 @@ build_and_deploy_frontend() {
 
     # Validate frontend deployment
     log_info "Validating frontend deployment..."
-    indent_output kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=workspaces-frontend -n kubeflow-workspaces --timeout=300s
+    indent_output kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=ui,app.kubernetes.io/name=workspaces-frontend -n kubeflow-workspaces --timeout=300s
     log_success "Frontend built, deployed, and validated"
 }
 
