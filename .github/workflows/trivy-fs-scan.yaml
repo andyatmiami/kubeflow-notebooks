@@ -45,8 +45,9 @@ jobs:
 
     - name: Add branch metadata to SARIF
       run: |
-        # Add category and modify ruleId to include branch information
-        jq '.runs[0].results[] |= (.category = "trivy-fs-scan-${{ matrix.branch }}" | .ruleId = "trivy-fs-${{ matrix.branch }}-" + .ruleId)' \
+        # Add category at run level and modify ruleId to include branch information
+        jq '.runs[0].category = "trivy-fs-scan-${{ matrix.branch }}" |
+           .runs[0].results[] |= (.ruleId = "trivy-fs-${{ matrix.branch }}-" + .ruleId)' \
            trivy-fs-scan-results-${{ matrix.branch }}.sarif > trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif
         mv trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif trivy-fs-scan-results-${{ matrix.branch }}.sarif
 
