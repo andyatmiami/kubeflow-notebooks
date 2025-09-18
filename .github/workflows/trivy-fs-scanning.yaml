@@ -40,18 +40,18 @@ jobs:
         format: 'sarif'
         severity: 'CRITICAL,HIGH'
         ignore-unfixed: true
-        output: 'trivy-fs-scan-results-${{ matrix.branch }}.sarif'
+        output: 'andyhack-trivy-fs-scan-results-${{ matrix.branch }}.sarif'
 
     - name: Add branch metadata to SARIF
       run: |
         # Modify ruleId to include branch information for identification
-        jq '.runs[0].results[] |= (.ruleId = "trivy-fs-${{ matrix.branch }}-" + .ruleId)' \
-           trivy-fs-scan-results-${{ matrix.branch }}.sarif > trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif
-        mv trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif trivy-fs-scan-results-${{ matrix.branch }}.sarif
+        jq '.runs[0].results[] |= (.ruleId = "andyhack-trivy-fs-${{ matrix.branch }}-" + .ruleId)' \
+           andyhack-trivy-fs-scan-results-${{ matrix.branch }}.sarif > andyhack-trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif
+        mv andyhack-trivy-fs-scan-results-${{ matrix.branch }}-processed.sarif andyhack-trivy-fs-scan-results-${{ matrix.branch }}.sarif
 
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
       with:
-          sarif_file: 'trivy-fs-scan-results-${{ matrix.branch }}.sarif'
+          sarif_file: 'andyhack-trivy-fs-scan-results-${{ matrix.branch }}.sarif'
           ref: ${{ steps.checkout.outputs.ref }}
           sha: ${{ steps.checkout.outputs.commit }}
