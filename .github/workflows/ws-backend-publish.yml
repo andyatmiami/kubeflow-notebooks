@@ -10,7 +10,7 @@ on:
       - releasing/version/VERSION
 
 env:
-  REGISTRY: ghcr.io/kubeflow/notebooks
+  REGISTRY: ghcr.io/andyatmiami/kubeflow-notebooks
   NAME: workspaces-backend
 
 jobs:
