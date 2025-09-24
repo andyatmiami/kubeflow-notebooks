@@ -111,11 +111,3 @@ func (a *App) LocationGetWorkspaceKind(name string) string {
 	path := strings.Replace(WorkspaceKindsByNamePath, ":"+ResourceNamePathParam, name, 1)
 	return path
 }
-
-// DummyFn is a dummy function to test the build process.
-// It is not used in the codebase.
-// It is only used to test the build process.
-// It is not used in the codebase.
-func (a *App) DummyFn(name string) string {
-	return "dummy"
-}
