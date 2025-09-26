@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMG: ghcr.io/kubeflow/notebooks/jupyter-web-app
+  IMG: ghcr.io/andyatmiami/kubeflow-notebooks/jupyter-web-app
 
 jobs:
   build:
