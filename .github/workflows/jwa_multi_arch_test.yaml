@@ -16,6 +16,8 @@ concurrency:
 
 env:
   IMG: ghcr.io/andyatmiami/kubeflow-notebooks/jupyter-web-app
+  ACTIONS_RUNNER_DEBUG: true
+  ACTIONS_STEP_DEBUG: true
 
 jobs:
   build:
@@ -32,6 +34,10 @@ jobs:
 
     - name: Build multi-arch Images (AMD64 & PPC64LE)
       run: |
+        export DOCKER_BUILDKIT=1
+        export BUILDKIT_PROGRESS=plain
+        export BUILDKIT_LOG_LEVEL=debug
+        export BUILDKIT_STEP_LOG_MAX_SIZE=4194304
         cd components/crud-web-apps/jupyter
         ARCH=linux/amd64 make docker-build-multi-arch-verify
         ARCH=linux/ppc64le make docker-build-multi-arch-verify
