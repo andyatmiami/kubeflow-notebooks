@@ -7,7 +7,6 @@ ARCH ?= linux/amd64
 docker-build:
 	cd ../ && docker build -t ${IMG}:${TAG} -f ${DOCKERFILE} .
 
-.PHONY: docker-push
 docker-push:
 	docker push $(IMG):$(TAG)
 
