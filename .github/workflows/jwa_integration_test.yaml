@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMG: ghcr.io/kubeflow/notebooks/jupyter-web-app
+  IMG: ghcr.io/andyatmiami/kubeflow-notebooks/notebooks/jupyter-web-app
   TAG: integration-test
 
 jobs:
