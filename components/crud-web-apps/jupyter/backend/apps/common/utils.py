@@ -26,10 +26,6 @@ CONFIGS = [
     DEV_CONFIG,
 ]
 
-def dummy_func():
-    """To be removed - just using to trigger tests"""
-    return "LFG!"
-
 
 def random_string(size=9, chars=string.ascii_lowercase + string.digits):
     """Create a random string."""
