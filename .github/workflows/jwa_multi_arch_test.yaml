@@ -16,11 +16,23 @@ concurrency:
 
 env:
   IMG: ghcr.io/andyatmiami/kubeflow-notebooks/jupyter-web-app
-  ACTIONS_RUNNER_DEBUG: true
-  ACTIONS_STEP_DEBUG: true
 
 jobs:
-  build:
+  build-amd64:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build amd64 arch-specific image
+      run: |
+        cd components/crud-web-apps/jupyter
+        ARCH=linux/amd64 make docker-build-multi-arch-verify
+
+  build-ppc64le:
     runs-on: ubuntu-22.04
     steps:
     - name: Checkout
@@ -32,14 +44,22 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build multi-arch Images (AMD64 & PPC64LE)
+    - name: Build ppc64le arch-specific image
       run: |
-        export DOCKER_BUILDKIT=1
-        export BUILDKIT_PROGRESS=plain
-        export BUILDKIT_LOG_LEVEL=debug
-        export BUILDKIT_STEP_LOG_MAX_SIZE=4194304
         cd components/crud-web-apps/jupyter
-        ARCH=linux/amd64 make docker-build-multi-arch-verify
         ARCH=linux/ppc64le make docker-build-multi-arch-verify
+
+  build-arm64:
+    runs-on: ubuntu-22.04-arm64
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build arm64/v8 arch-specific image
+      run: |
+        cd components/crud-web-apps/jupyter
         ARCH=linux/arm64/v8 make docker-build-multi-arch-verify
-        
+

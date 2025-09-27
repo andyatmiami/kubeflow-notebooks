@@ -17,10 +17,10 @@ docker-build-multi-arch: ##  Build multi-arch docker images with docker buildx
 .PHONY: docker-build-multi-arch-verify
 docker-build-multi-arch-verify: ##  Build multi-arch docker images with arch-specific tags for verification
 	$(eval ARCH_SAFE := $(shell echo ${ARCH} | sed 's|/|-|g'))
-	cd ../ && docker buildx build --load --platform ${ARCH} --tag ${IMG}:${TAG}-${ARCH_SAFE} -f ${DOCKERFILE} .
+	cd ../ && docker buildx build --output=type=cacheonly --platform ${ARCH} --tag ${IMG}:${TAG} -f ${DOCKERFILE} .
 
 .PHONY: docker-build-push-multi-arch
-docker-build-push-multi-arch: ## Build multi-arch docker images with docker buildx and push to docker registry 
+docker-build-push-multi-arch: ## Build multi-arch docker images with docker buildx and push to docker registry
 	cd ../ && docker buildx build --platform ${ARCH} --tag ${IMG}:${TAG} --push -f ${DOCKERFILE} .
 
 image: docker-build docker-push
