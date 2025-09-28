@@ -50,16 +50,25 @@ jobs:
         ARCH=linux/ppc64le make docker-build-multi-arch-verify
 
   build-arm64:
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-24.04
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Docker Buildx
-      uses: docker/setup-buildx-action@v3
+    - name: Install Podman
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install podman      
+
+    - name: Setup QEMU
+      uses: docker/setup-qemu-action@v3
 
     - name: Build arm64/v8 arch-specific image
       run: |
         cd components/crud-web-apps/jupyter
-        ARCH=linux/arm64/v8 make docker-build-multi-arch-verify
+        podman build \
+          --platform linux/arm64/v8 \
+          --tag ghcr.io/kubeflow/notebooks/jupyter-web-app:$(git describe --tags --always --dirty) \
+          -f ./Dockerfile \
+          ..
 
