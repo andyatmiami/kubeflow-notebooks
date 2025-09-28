@@ -15,7 +15,7 @@ COPY ./common/frontend/kubeflow-common-lib/package.json \
      ./common/frontend/kubeflow-common-lib/package-lock.json ./
      
 ENV NG_CLI_ANALYTICS="ci"
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy remaining source files and build in one layer
 COPY ./common/frontend/kubeflow-common-lib/projects ./projects
@@ -38,7 +38,7 @@ COPY ./jupyter/frontend/package.json \
 COPY ./jupyter/frontend/src ./src
 
 ENV NG_CLI_ANALYTICS="ci"
-RUN npm ci --only=production
+RUN npm ci
 COPY --from=frontend-kubeflow-lib /src/dist/kubeflow/ ./node_modules/kubeflow/
 RUN npm run build -- --output-path=./dist/default --configuration=production
 
