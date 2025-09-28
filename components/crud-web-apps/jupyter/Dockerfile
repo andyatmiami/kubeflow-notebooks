@@ -7,37 +7,39 @@ COPY ./common/backend/ .
 RUN python3 setup.py bdist_wheel
 
 # --- Build the frontend kubeflow library ---
-FROM node:16.20.2-bullseye as frontend-kubeflow-lib
+FROM node:16.20.2-bullseye AS frontend-kubeflow-lib
 
 WORKDIR /src
 
-ENV NG_CLI_ANALYTICS "ci"
-COPY ./common/frontend/kubeflow-common-lib/package.json ./
-COPY ./common/frontend/kubeflow-common-lib/package-lock.json ./
-RUN npm ci
+COPY ./common/frontend/kubeflow-common-lib/package.json \
+     ./common/frontend/kubeflow-common-lib/package-lock.json ./
+     
+ENV NG_CLI_ANALYTICS="ci"
+RUN npm ci --only=production
 
+# Copy remaining source files and build in one layer
 COPY ./common/frontend/kubeflow-common-lib/projects ./projects
-COPY ./common/frontend/kubeflow-common-lib/angular.json .
-COPY ./common/frontend/kubeflow-common-lib/tsconfig.json .
+COPY ./common/frontend/kubeflow-common-lib/angular.json \
+     ./common/frontend/kubeflow-common-lib/tsconfig.json ./
 RUN npm run build
 
 # --- Build the frontend ---
-FROM node:16.20.2-bullseye as frontend
+FROM node:16.20.2-bullseye AS frontend
 
 WORKDIR /src
 
-COPY ./jupyter/frontend/package.json ./
-COPY ./jupyter/frontend/package-lock.json ./
-COPY ./jupyter/frontend/tsconfig.json ./
-COPY ./jupyter/frontend/tsconfig.app.json ./
-COPY ./jupyter/frontend/tsconfig.spec.json ./
-COPY ./jupyter/frontend/angular.json ./
+# Copy package files first for better caching
+COPY ./jupyter/frontend/package.json \
+     ./jupyter/frontend/package-lock.json \
+     ./jupyter/frontend/tsconfig.json \
+     ./jupyter/frontend/tsconfig.app.json \
+     ./jupyter/frontend/tsconfig.spec.json \
+     ./jupyter/frontend/angular.json ./
 COPY ./jupyter/frontend/src ./src
 
-ENV NG_CLI_ANALYTICS "ci"
-RUN npm ci
+ENV NG_CLI_ANALYTICS="ci"
+RUN npm ci --only=production
 COPY --from=frontend-kubeflow-lib /src/dist/kubeflow/ ./node_modules/kubeflow/
-
 RUN npm run build -- --output-path=./dist/default --configuration=production
 
 # Web App
@@ -53,7 +55,7 @@ RUN pip3 install -r requirements.txt
 
 COPY ./jupyter/backend/apps/ ./apps
 COPY ./jupyter/backend/entrypoint.py .
-
 COPY --from=frontend /src/dist/default/ /src/apps/default/static/
 
 ENTRYPOINT ["/bin/bash","-c","gunicorn -w 3 --bind 0.0.0.0:5000 --access-logfile - entrypoint:app"]
+  
