@@ -2,6 +2,7 @@
 IMG ?= ghcr.io/kubeflow/kubeflow/pvcviewer-controller
 TAG ?= $(shell git describe --tags --always --dirty)
 ARCH ?= linux/amd64
+DUMMY ?= true
 
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd"
