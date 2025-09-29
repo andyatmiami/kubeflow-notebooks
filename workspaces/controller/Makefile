@@ -7,6 +7,7 @@ NAME ?= workspaces-controller
 TAG ?= sha-$(GIT_COMMIT)$(GIT_TREE_STATE)
 IMG ?= $(REGISTRY)/$(NAME):$(TAG)
 ARCH ?= linux/arm64/v8,linux/amd64,linux/ppc64le
+DUMMY ?= true
 
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
