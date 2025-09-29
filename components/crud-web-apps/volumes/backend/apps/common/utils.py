@@ -3,6 +3,12 @@ from kubeflow.kubeflow.crud_backend import api
 from . import status
 
 
+def dummy_function():
+    """
+    Dummy function to test the CI/CD pipeline.
+    """
+    return "Hello, World!"
+
 def parse_pvc(pvc, notebooks):
     """
     pvc: client.V1PersistentVolumeClaim

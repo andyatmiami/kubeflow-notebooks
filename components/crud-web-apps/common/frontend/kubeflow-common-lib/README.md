@@ -41,3 +41,5 @@ Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.
 
 ### Git commits
 Git commits that modify this code should be prefixed with `web-apps(front)`.
+
+## Change to trigger GHA checks
