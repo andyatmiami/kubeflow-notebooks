@@ -3,7 +3,7 @@ from kubeflow.kubeflow.crud_backend import api
 from . import status
 
 
-def dummy_function():
+def dummy_function_1():
     """
     Dummy function to test the CI/CD pipeline.
     """
