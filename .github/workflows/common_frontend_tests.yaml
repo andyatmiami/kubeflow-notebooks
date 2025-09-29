@@ -8,10 +8,16 @@ on:
       - v*-branch
       - notebooks-v1
 
+env:
+  FRONTEND_DIR: components/crud-web-apps/common/frontend/kubeflow-common-lib
+
 jobs:
   frontend-format-lint-check:
     name: Check code format and lint
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ${{ env.FRONTEND_DIR }}
 
     steps:
       - name: Check out code
@@ -21,22 +27,24 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 16
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Check frontend code formatting
-        run: |
-          cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm i
-          npm run format:check
+        run: npm run format:check
 
       - name: Check frontend code linting
-        run: |
-          cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm i
-          npm run lint-check
+        run: npm run lint-check
 
   frontend-unit-tests:
     runs-on: ubuntu-22.04
     name: Unit tests
+    defaults:
+      run:
+        working-directory: ${{ env.FRONTEND_DIR }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,9 +53,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 16
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
 
-      - name: Install Kubeflow common library dependecies
-        run: |
-          cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm i
-          npm run test:prod
+      - name: Install Kubeflow common library dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:prod
