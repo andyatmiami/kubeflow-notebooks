@@ -23,3 +23,5 @@ Run `ng test kubeflow` to execute the unit tests via [Karma](https://karma-runne
 ## Further help
 
 To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI documents](https://angular.io/cli).
+
+## Trigger checks

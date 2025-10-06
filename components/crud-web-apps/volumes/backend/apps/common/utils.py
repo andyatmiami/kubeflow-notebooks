@@ -2,6 +2,12 @@ from kubeflow.kubeflow.crud_backend import api
 
 from . import status
 
+def dummy_function():
+    """
+    This is a dummy function to trigger checks.
+    """
+    return "dummy_function"
+
 
 def parse_pvc(pvc, notebooks):
     """
