@@ -25,8 +25,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 16
-          cache: 'npm'
-          cache-dependency-path: 'components/crud-web-apps/tensorboards/frontend/package-lock.json'
 
       - name: Install dependencies
         run: npm ci
@@ -37,8 +35,8 @@ jobs:
       - name: Lint code
         run: npm run lint-check
 
-  build-common-lib:
-    name: Build Kubeflow common library
+  frontend-unit-tests:
+    name: Unit tests
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
@@ -48,50 +46,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 16
-          cache: 'npm'
-          cache-dependency-path: 'components/crud-web-apps/common/frontend/kubeflow-common-lib/package-lock.json'
 
-      - name: Install and build common library
+      - name: Install Kubeflow common library dependecies
         run: |
           cd components/crud-web-apps/common/frontend/kubeflow-common-lib
           npm ci
           npm run build
-
-      - name: Cache built common library
-        uses: actions/cache@v4
-        with:
-          path: components/crud-web-apps/common/frontend/kubeflow-common-lib/dist
-          key: kubeflow-common-lib-${{ github.sha }}
-          restore-keys: |
-            kubeflow-common-lib-
-
-  frontend-unit-tests:
-    name: Unit tests
-    runs-on: ubuntu-22.04
-    needs: build-common-lib
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 16
-          cache: 'npm'
-          cache-dependency-path: 'components/crud-web-apps/tensorboards/frontend/package-lock.json'
-
-      - name: Restore built common library
-        uses: actions/cache@v4
-        with:
-          path: components/crud-web-apps/common/frontend/kubeflow-common-lib/dist
-          key: kubeflow-common-lib-${{ github.sha }}
-          restore-keys: |
-            kubeflow-common-lib-
-
-      - name: Install common library dependencies
-        run: |
-          cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm ci
           npm link ./dist/kubeflow
 
       - name: Install TWA dependencies
@@ -108,7 +68,6 @@ jobs:
   frontend-ui-tests:
     name: UI tests with Cypress
     runs-on: ubuntu-22.04
-    needs: build-common-lib
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -117,21 +76,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 16
-          cache: 'npm'
-          cache-dependency-path: 'components/crud-web-apps/tensorboards/frontend/package-lock.json'
-
-      - name: Restore built common library
-        uses: actions/cache@v4
-        with:
-          path: components/crud-web-apps/common/frontend/kubeflow-common-lib/dist
-          key: kubeflow-common-lib-${{ github.sha }}
-          restore-keys: |
-            kubeflow-common-lib-
 
       - name: Install common library dependencies
         run: |
           cd components/crud-web-apps/common/frontend/kubeflow-common-lib
           npm ci
+          npm run build
           npm link ./dist/kubeflow
 
       - name: Install TWA dependencies

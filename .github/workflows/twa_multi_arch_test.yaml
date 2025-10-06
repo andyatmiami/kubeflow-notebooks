@@ -1,5 +1,5 @@
 name: TWA Multi-Arch Build Test
-on: 
+on:
   pull_request:
     paths:
       - components/crud-web-apps/tensorboards/**
@@ -37,10 +37,4 @@ jobs:
         context: components/crud-web-apps
         file: components/crud-web-apps/tensorboards/Dockerfile
         platforms: ${{ env.PLATFORMS }}
-        push: false
-        load: false
-        tags: |
-          ${{ env.IMG }}:${{ github.sha }}
-          ${{ env.IMG }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        tags: ${{ env.IMG }}:${{ github.sha }}
