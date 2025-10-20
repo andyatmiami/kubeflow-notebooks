@@ -28,12 +28,12 @@ jobs:
 
       - name: Format tensorboards web app
         run: |
-            npm ci
+            npm i
             npm run format:check
-  
+
       - name: Lint tensorboards web app
         run: |
-            npm ci
+            npm i
             npm run lint-check
 
   frontend-unit-tests:
@@ -51,14 +51,14 @@ jobs:
       - name: Install common library dependencies
         run: |
           cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm ci
+          npm i
           npm run build
           npm link ./dist/kubeflow
 
       - name: Install TWA dependencies
         run: |
           cd components/crud-web-apps/tensorboards/frontend
-          npm ci
+          npm i
           npm link kubeflow
 
       - name: Run unit tests
@@ -81,14 +81,14 @@ jobs:
       - name: Install common library dependencies
         run: |
           cd components/crud-web-apps/common/frontend/kubeflow-common-lib
-          npm ci
+          npm i
           npm run build
           npm link ./dist/kubeflow
 
       - name: Install TWA dependencies
         run: |
           cd components/crud-web-apps/tensorboards/frontend
-          npm ci
+          npm i
           npm link kubeflow
 
       - name: Serve UI & run Cypress tests in Chrome and Firefox
