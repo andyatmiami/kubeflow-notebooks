@@ -28,14 +28,14 @@ Prequisites to build and run the controller:
 
 ## RUN TENSORBOARD CONTROLLER LOCALLY
 
-Steps: 
+Steps:
 
 
-1. Clone the repository 
+1. Clone the repository
 
 2. Change directories to `components/tensorboard-controller`
 
-3. Generate and install manifests and build the controller:  `make install` 
+3. Generate and install manifests and build the controller:  `make install`
 
 4. Run the controller locally:   `make run`
 
@@ -43,19 +43,21 @@ If you want to enable the scheduling functionality for Tensorboard servers that 
 
 ## BUILD TENSORBOARD CONTROLLER IMAGE AND DEPLOY TO CLUSTER
 
-1. Clone the repository 
+1. Clone the repository
 
 2. Change directories to `components/tensorboard-controller`
 
-3. Generate and install manifests and build the controller: `make manifests` 
+3. Generate and install manifests and build the controller: `make manifests`
 
 4. Build and push the docker image: `make docker-build docker-push IMG=YOUR_IMAGE_NAME`
 
 5. Deploy the Tensorboard controller: `make deploy IMG=YOUR_IMAGE_NAME`
 
-If you want to enable the scheduling functionality for Tensorboard servers that use ReadWriteOnce PVCs as log storages, then: 
+If you want to enable the scheduling functionality for Tensorboard servers that use ReadWriteOnce PVCs as log storages, then:
 
 1. Change directories to `components/tensorboard-controller/config/manager`
 2. Modify the `manager.yaml` file by navigating to the `deployment.spec.template.spec` field and manually setting the value of the `RWO_PVC_SCHEDULING` env var to `"true"` in the manager container.
 
 3. Run: `make deploy IMG=YOUR_IMAGE_NAME`
+
+## Trigger changes
