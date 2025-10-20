@@ -45,6 +45,7 @@
     "monaco-editor": "^0.33.0",
     "raw-loader": "^4.0.0",
     "rxjs": "~7.4.0",
+    "tough-cookie": "^4.1.4",
     "tslib": "^2.0.0",
     "zone.js": "~0.11.4"
   },
