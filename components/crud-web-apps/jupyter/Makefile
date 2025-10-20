@@ -3,7 +3,7 @@ TAG ?= $(shell git describe --tags --always --dirty)
 DOCKERFILE ?= jupyter/Dockerfile
 ARCH ?= linux/amd64
 
-
+.PHONY: docker-build
 docker-build:
 	cd ../ && docker build -t ${IMG}:${TAG} -f ${DOCKERFILE} .
 
