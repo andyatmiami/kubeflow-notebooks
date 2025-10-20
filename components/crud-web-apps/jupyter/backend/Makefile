@@ -6,6 +6,7 @@ install-deps:
 	popd
 	pip install -r requirements.txt
 
+.PHONY: unittest
 unittest:
 	python -m unittest discover --pattern "*_test.py"
 
