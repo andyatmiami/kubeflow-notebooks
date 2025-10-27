@@ -38,3 +38,6 @@ In the case of WSL2 on _Windows 10_, [this extra setup](https://docs.cypress.io/
 ## Further help
 
 To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI documents](https://angular.io/cli).
+
+
+## Trigger tests
