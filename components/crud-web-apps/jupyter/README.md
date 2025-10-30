@@ -117,3 +117,5 @@ npm i
 # run the tests
 npm run e2e
 ```
+
+## Trigger publish
