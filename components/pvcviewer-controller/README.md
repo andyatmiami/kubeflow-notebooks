@@ -1,6 +1,6 @@
 # PVCViewer
 
-Using this component, PVCViewers can easily be created. PVCViewers enable users to open a filebrowser on arbitrary persistent volume claims, letting them inspect, download, upload and manipulate data. 
+Using this component, PVCViewers can easily be created. PVCViewers enable users to open a filebrowser on arbitrary persistent volume claims, letting them inspect, download, upload and manipulate data.
 
 The PVCViewer API is meant to be extensible and can easily be user for other use-cases, such as launching user-tailored apps (e.g. tensorboards or notebooks).
 
@@ -47,17 +47,17 @@ spec:
 
 ## Configuring Default values
 
-You may set a `spec.podSpec` to gain control over the started filebrowser. 
+You may set a `spec.podSpec` to gain control over the started filebrowser.
 
 In case the podSpec is omitted, a default podSpec is inferred.
-You may change the defaults by having the manager mount a config file with defaults and setting the env-variable `DEFAULT_POD_SPEC_PATH`. 
+You may change the defaults by having the manager mount a config file with defaults and setting the env-variable `DEFAULT_POD_SPEC_PATH`.
 
 This is especially useful, when you can't control the creation of the `PVCViewer` object, e.g. since it's automatically created by another component such as the volumes UI.
 
 ## How it works
 This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
 
-It uses [controllers](https://kubernetes.io/docs/concepts/architecture/controller/) to watch all changes to viewer objects and react accordingly. 
+It uses [controllers](https://kubernetes.io/docs/concepts/architecture/controller/) to watch all changes to viewer objects and react accordingly.
 Technically, this is implemented by the reconcile loop: it syncs resources until the desired state is reached on the cluster.
 
 ## Modifying the API definitions
@@ -67,7 +67,7 @@ If you are editing the API definitions, generate the manifests such as CRs or CR
 make manifests
 ```
 
-## Testing 
+## Testing
 
 In order to test the controller, simply execute:
 
@@ -79,7 +79,7 @@ make test
 
 You’ll need a Kubernetes cluster to run against.
 
-Also, Istio and Cert-Manager need to be installed. 
+Also, Istio and Cert-Manager need to be installed.
 We recommend installing Kubeflow as it bundles all required components.
 
 1. Install the default config using Kustomize:
@@ -89,11 +89,11 @@ kubectl apply -k config/default
 ```
 
 2. Build the controller image:
-	
+
 ```sh
 docker build -t kubeflow-pvc-viewer:test .
 ```
-	
+
 3. Set the controller to use the image:
 
 ```sh
@@ -107,3 +107,5 @@ kubectl apply -k config/samples
 ```
 
 After the viewer has been launched, you should be able to open the filebrowser in your browser at `/pvcviewer/kubeflow-user-example-com/pvcviewer-sample/files/`.
+
+## Trigger publish
