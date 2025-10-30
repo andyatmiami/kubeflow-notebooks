@@ -11,7 +11,7 @@ on:
       - releasing/version/VERSION
 
 env:
-  IMG: ghcr.io/kubeflow/notebooks/jupyter-web-app
+  IMG: ghcr.io/andyatmiami/kubeflow-notebooks/jupyter-web-app
   ARCH: linux/amd64,linux/ppc64le,linux/arm64
 
 jobs:
