@@ -11,7 +11,7 @@ on:
       - releasing/version/VERSION
 
 env:
-  IMG: ghcr.io/kubeflow/notebooks/tensorboards-web-app
+  IMG: ghcr.io/andyatmiami/kubeflow-notebooks/tensorboards-web-app
   ARCH: linux/amd64,linux/ppc64le,linux/arm64/v8
 
 defaults:
@@ -36,7 +36,7 @@ jobs:
 
     - name: Login to GHCR
       uses: docker/login-action@v3
-      with: 
+      with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
