@@ -11,7 +11,7 @@ on:
       - releasing/version/VERSION
 
 env:
-  IMG: ghcr.io/kubeflow/notebooks/notebook-controller
+  IMG: ghcr.io/andyatmiami/kubeflow-notebooks/notebook-controller
   ARCH: linux/amd64,linux/ppc64le,linux/arm64/v8
 
 jobs:
