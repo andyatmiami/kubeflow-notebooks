@@ -1,4 +1,4 @@
-IMG ?= ghcr.io/kubeflow/kubeflow/volumes-web-app
+IMG ?= ghcr.io/andyatmiami/kubeflow-notebooks/volumes-web-app
 TAG ?= $(shell git describe --tags --always --dirty)
 ARCH ?= linux/amd64
 
@@ -14,7 +14,7 @@ docker-build-multi-arch: ##  Build multi-arch docker images with docker buildx
 	docker buildx build --load --platform ${ARCH} --tag ${IMG}:${TAG} -f Dockerfile ..
 
 .PHONY: docker-build-push-multi-arch
-docker-build-push-multi-arch: ## Build multi-arch docker images with docker buildx and push to docker registry 
+docker-build-push-multi-arch: ## Build multi-arch docker images with docker buildx and push to docker registry
 	docker buildx build --platform ${ARCH} --tag ${IMG}:${TAG} --push -f Dockerfile ..
 
 image: docker-build docker-push
