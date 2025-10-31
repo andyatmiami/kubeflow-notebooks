@@ -68,4 +68,3 @@ ng serve --configuration=fr
 you must also ensure that the backend is running, since angular's dev server
 will be proxying request to the backend at `localhost:5000`.
 
-## Trigger publish
