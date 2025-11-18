@@ -85,7 +85,7 @@ module.exports = smp.wrap(
         port: PORT,
         compress: true,
         historyApiFallback: {
-          index: `${BASE_PATH}/index.html`,
+          index: `${BASE_PATH}/index.html`.replace('//', '/'),
         },
         hot: true,
         open: [BASE_PATH],
