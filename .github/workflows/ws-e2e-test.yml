@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - 'workspaces/**'
+      - 'testing/**'
       - 'releasing/version/VERSION'
 
 jobs:
@@ -31,6 +32,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Generate cache key from Makefile
         id: cache-key
@@ -54,6 +60,19 @@ jobs:
       - name: Sanity check
         run: make sanity-check
 
+      - name: Setup e2e test data
+        run: make setup-e2e
+
       - name: Run local-e2e tests
         run: make local-e2e
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-test-results
+          path: |
+            testing/e2e/cypress/videos/
+            testing/e2e/cypress/screenshots/
+          retention-days: 7
 

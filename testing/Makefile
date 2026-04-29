@@ -45,7 +45,7 @@ help: ## Display this help.
 
 ##@ Deployment
 
-.PHONY: build-controller build-backend build-frontend build-all e2e sanity-check
+.PHONY: build-controller build-backend build-frontend build-all e2e sanity-check setup-e2e local-e2e
 
 deploy-controller: kind check-kind-context ## Build and deploy the controller.
 	cd ../workspaces/controller && $(MAKE) docker-build IMG=$(CONTROLLER_IMG)
@@ -67,8 +67,11 @@ deploy-all: deploy-controller deploy-backend deploy-frontend ## Deploy all compo
 sanity-check: check-kind-context ## Verify all components are deployed and responding.
 	@bash scripts/sanity-check.sh
 
-local-e2e: ## Run e2e tests.
-	@echo "TODO: Run e2e tests..."
+setup-e2e: check-kind-context ## Set up RBAC and seed data for e2e tests.
+	@bash scripts/setup-e2e.sh
+
+local-e2e: check-kind-context ## Run Cypress e2e tests against deployed stack.
+	@bash scripts/run-e2e.sh
 
 
 ##@ Dependencies

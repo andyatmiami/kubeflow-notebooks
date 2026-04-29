@@ -1,0 +1,98 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-test
+  labels:
+    istio-injection: enabled
+---
+# Admin ClusterRole: full CRUD on WorkspaceKinds, read access to supporting resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-admin
+rules:
+  - apiGroups: ["kubeflow.org"]
+    resources: ["workspacekinds"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: ["kubeflow.org"]
+    resources: ["workspaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+---
+# User ClusterRole: read-only on cluster-scoped resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-user-cluster-reader
+rules:
+  - apiGroups: ["kubeflow.org"]
+    resources: ["workspacekinds"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+# User Role: full CRUD on namespaced resources in e2e-test
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-user-namespaced
+rules:
+  - apiGroups: ["kubeflow.org"]
+    resources: ["workspaces"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+# Bind admin user to admin ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-admin-binding
+subjects:
+  - kind: User
+    name: admin@e2e.test
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: e2e-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind normal user to cluster-scoped reader
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-user-cluster-reader-binding
+subjects:
+  - kind: User
+    name: user@e2e.test
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: e2e-user-cluster-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# Bind normal user to namespaced role in e2e-test namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-user-binding
+  namespace: e2e-test
+subjects:
+  - kind: User
+    name: user@e2e.test
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: e2e-user-namespaced
+  apiGroup: rbac.authorization.k8s.io
