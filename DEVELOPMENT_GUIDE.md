@@ -123,6 +123,20 @@ What this does:
 > ENABLE_FRONTEND=false make tilt-up
 > ```
 
+> [!TIP]
+>
+> To use a local container registry instead of `kind load docker-image`:
+>
+> ```bash
+> ENABLE_REGISTRY=true make tilt-up
+> ```
+>
+> This creates a local [OCI registry](https://kind.sigs.k8s.io/docs/user/local-registry/) and configures both Kind and Tilt to use it.
+> Only changed image layers are pushed on each rebuild, which can speed up incremental builds.
+> The registry container persists across `tilt down` / `tilt up` cycles so restarts are fast.
+>
+> When using Podman (`KIND_EXPERIMENTAL_PROVIDER=podman`), the script automatically configures the Podman machine to allow insecure (HTTP) pushes to the local registry.
+
 Wait until all resources show green/healthy status. 
 The frontend may take a couple of minutes on first start as webpack compiles the bundle.
 
@@ -219,6 +233,13 @@ If you want to completely remove the Kind cluster, you can do so with:
 
 ```bash
 kind delete cluster --name tilt
+```
+
+If you used `ENABLE_REGISTRY=true`, you can also remove the local registry container:
+
+```bash
+cd developing
+make teardown-registry
 ```
 
 ## Tilt - Troubleshooting
