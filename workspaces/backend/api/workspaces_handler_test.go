@@ -38,6 +38,7 @@ import (
 	"github.com/kubeflow/notebooks/workspaces/backend/api/constants"
 	commonModels "github.com/kubeflow/notebooks/workspaces/backend/internal/models/common"
 	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces"
+	commonWorkspaces "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces/common"
 )
 
 var _ = Describe("Workspaces Handler", func() {
@@ -479,7 +480,7 @@ var _ = Describe("Workspaces Handler", func() {
 			By("ensuring the model for Workspace with missing WorkspaceKind is as expected")
 			workspaceMissingWskModel := models.NewWorkspaceListItemFromWorkspace(a.Config, workspaceMissingWsk, nil)
 			Expect(workspaceMissingWskModel.WorkspaceKind.Missing).To(BeTrue())
-			Expect(workspaceMissingWskModel.PodTemplate.Volumes.Home.MountPath).To(Equal(models.UnknownHomeMountPath))
+			Expect(workspaceMissingWskModel.PodTemplate.Volumes.Home.MountPath).To(Equal(commonWorkspaces.UnknownHomeMountPath))
 			Expect(workspaceMissingWskModel.PodTemplate.Options.PodConfig.Current.DisplayName).To(Equal(models.UnknownPodConfig))
 			Expect(workspaceMissingWskModel.PodTemplate.Options.PodConfig.Current.Description).To(Equal(models.UnknownPodConfig))
 			Expect(workspaceMissingWskModel.PodTemplate.Options.ImageConfig.Current.DisplayName).To(Equal(models.UnknownImageConfig))

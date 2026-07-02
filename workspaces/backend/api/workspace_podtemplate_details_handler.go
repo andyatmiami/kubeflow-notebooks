@@ -26,12 +26,12 @@ import (
 	"github.com/kubeflow/notebooks/workspaces/backend/api/constants"
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/auth"
 	"github.com/kubeflow/notebooks/workspaces/backend/internal/helper"
-	modelsDetails "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces/podtemplate/details"
+	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces/podtemplate/details"
 	repository "github.com/kubeflow/notebooks/workspaces/backend/internal/repositories/workspaces"
 )
 
 // WorkspaceDetailsEnvelope is the response envelope for workspace details.
-type WorkspaceDetailsEnvelope Envelope[*modelsDetails.WorkspaceDetails]
+type WorkspaceDetailsEnvelope Envelope[*models.WorkspaceDetails]
 
 // GetWorkspacePodTemplateDetailsHandler returns pod template details for the workspace details overlay.
 //
@@ -39,7 +39,6 @@ type WorkspaceDetailsEnvelope Envelope[*modelsDetails.WorkspaceDetails]
 //	@Description	Returns detail-level data for the workspace details overlay (volumes, secrets, pod info).
 //	@Tags			workspaces
 //	@ID				getWorkspacePodTemplateDetails
-//	@Produce		application/json
 //	@Produce		json
 //	@Param			namespace	path		string						true	"Namespace of the workspace"	extensions(x-example=kubeflow-user-example-com)
 //	@Param			name		path		string						true	"Name of the workspace"			extensions(x-example=my-workspace)

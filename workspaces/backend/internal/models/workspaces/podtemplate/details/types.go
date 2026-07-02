@@ -35,8 +35,8 @@ type WorkspaceDetailVolumes struct {
 type WorkspaceDetailPod struct {
 	Name           string                     `json:"name"`
 	NodeName       string                     `json:"nodeName"`
-	Containers     []WorkspaceDetailContainer `json:"containers"`
-	InitContainers []WorkspaceDetailContainer `json:"initContainers"`
+	Containers     []WorkspaceDetailContainer `json:"containers,omitempty"`
+	InitContainers []WorkspaceDetailContainer `json:"initContainers,omitempty"`
 }
 
 type WorkspaceDetailContainer struct {

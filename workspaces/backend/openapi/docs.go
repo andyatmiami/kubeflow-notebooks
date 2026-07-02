@@ -1847,7 +1847,6 @@ const docTemplate = `{
             "get": {
                 "description": "Returns detail-level data for the workspace details overlay (volumes, secrets, pod info).",
                 "produces": [
-                    "application/json",
                     "application/json"
                 ],
                 "tags": [
@@ -2371,8 +2370,6 @@ const docTemplate = `{
         "details.WorkspaceDetailPod": {
             "type": "object",
             "required": [
-                "containers",
-                "initContainers",
                 "name",
                 "nodeName"
             ],
@@ -7482,7 +7479,6 @@ const docTemplate = `{
                 "paused",
                 "pausedTime",
                 "pendingRestart",
-                "podMetadata",
                 "podTemplate",
                 "services",
                 "state",
@@ -7510,9 +7506,6 @@ const docTemplate = `{
                 },
                 "pendingRestart": {
                     "type": "boolean"
-                },
-                "podMetadata": {
-                    "$ref": "#/definitions/common.PodMetadata"
                 },
                 "podTemplate": {
                     "$ref": "#/definitions/workspaces.PodTemplate"

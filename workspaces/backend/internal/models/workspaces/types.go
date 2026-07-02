@@ -38,7 +38,6 @@ type WorkspaceListItem struct {
 	State          kubefloworgv1beta1.WorkspaceState `json:"state"`
 	StateMessage   string                            `json:"stateMessage"`
 	PodTemplate    PodTemplate                       `json:"podTemplate"`
-	PodMetadata    commonWorkspaces.PodMetadata      `json:"podMetadata"`
 	Activity       Activity                          `json:"activity"`
 	Services       []Service                         `json:"services"`
 	Audit          commonCore.Audit                  `json:"audit"`

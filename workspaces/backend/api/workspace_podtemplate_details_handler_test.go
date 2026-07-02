@@ -33,7 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kubeflow/notebooks/workspaces/backend/api/constants"
-	modelsDetails "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces/podtemplate/details"
+	models "github.com/kubeflow/notebooks/workspaces/backend/internal/models/workspaces/podtemplate/details"
 )
 
 var _ = Describe("Workspace PodTemplate Details Handler", func() {
@@ -123,12 +123,82 @@ var _ = Describe("Workspace PodTemplate Details Handler", func() {
 			wskCRD := &kubefloworgv1beta1.WorkspaceKind{}
 			Expect(k8sClient.Get(ctx, workspaceKindKey, wskCRD)).To(Succeed())
 
-			expected := modelsDetails.NewWorkspaceDetailsFromWorkspace(wsCRD, wskCRD)
-			if len(expected.Volumes.Secrets) == 0 {
-				expected.Volumes.Secrets = nil
-			}
+			expected := models.NewWorkspaceDetailsFromWorkspace(wsCRD, wskCRD)
 			Expect(response.Data).To(BeComparableTo(&expected))
 
+		})
+	})
+
+	Context("with missing WorkspaceKind", Serial, Ordered, func() {
+		const namespaceName = "details-missing-wsk-ns"
+		var (
+			workspaceName string
+			workspaceKey  types.NamespacedName
+		)
+
+		BeforeAll(func() {
+			workspaceName = "workspace-missing-wsk"
+			workspaceKey = types.NamespacedName{Name: workspaceName, Namespace: namespaceName}
+
+			By("creating the Namespace")
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+
+			By("creating the Workspace referencing a non-existent WorkspaceKind")
+			ws := NewExampleWorkspace(workspaceName, namespaceName, "non-existent-wsk")
+			Expect(k8sClient.Create(ctx, ws)).To(Succeed())
+		})
+
+		AfterAll(func() {
+			By("deleting the Workspace")
+			ws := &kubefloworgv1beta1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: workspaceName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Delete(ctx, ws)).To(Succeed())
+
+			By("deleting the Namespace")
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
+			}
+			Expect(k8sClient.Delete(ctx, namespace)).To(Succeed())
+		})
+
+		It("should return 200 with fallback data when WorkspaceKind is missing", func() {
+			By("creating the HTTP request")
+			path := strings.Replace(constants.WorkspacePodTemplateDetailsPath, ":"+constants.NamespacePathParam, namespaceName, 1)
+			path = strings.Replace(path, ":"+constants.ResourceNamePathParam, workspaceName, 1)
+
+			req, err := http.NewRequest(http.MethodGet, path, http.NoBody)
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set(userIdHeader, adminUser)
+
+			By("executing GetWorkspacePodTemplateDetailsHandler")
+			ps := httprouter.Params{
+				httprouter.Param{Key: constants.NamespacePathParam, Value: namespaceName},
+				httprouter.Param{Key: constants.ResourceNamePathParam, Value: workspaceName},
+			}
+			rr := httptest.NewRecorder()
+			a.GetWorkspacePodTemplateDetailsHandler(rr, req, ps)
+			rs := rr.Result()
+			defer rs.Body.Close()
+
+			By("verifying status is 200 OK")
+			Expect(rs.StatusCode).To(Equal(http.StatusOK))
+
+			By("verifying response uses fallback data")
+			body, err := io.ReadAll(rs.Body)
+			Expect(err).NotTo(HaveOccurred())
+
+			var response WorkspaceDetailsEnvelope
+			Expect(json.Unmarshal(body, &response)).To(Succeed())
+
+			wsCRD := &kubefloworgv1beta1.Workspace{}
+			Expect(k8sClient.Get(ctx, workspaceKey, wsCRD)).To(Succeed())
+
+			expected := models.NewWorkspaceDetailsFromWorkspace(wsCRD, &kubefloworgv1beta1.WorkspaceKind{})
+			Expect(response.Data).To(BeComparableTo(&expected))
 		})
 	})
 

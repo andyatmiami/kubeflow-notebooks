@@ -29,47 +29,27 @@ import (
 )
 
 const (
-	UnknownHomeMountPath = "__UNKNOWN_HOME_MOUNT_PATH__"
-	UnknownImageConfig   = "__UNKNOWN_IMAGE_CONFIG__"
-	UnknownPodConfig     = "__UNKNOWN_POD_CONFIG__"
-	UnknownIconURL       = "__UNKNOWN_ICON_URL__"
-	UnknownLogoURL       = "__UNKNOWN_LOGO_URL__"
+	UnknownImageConfig = "__UNKNOWN_IMAGE_CONFIG__"
+	UnknownPodConfig   = "__UNKNOWN_POD_CONFIG__"
+	UnknownIconURL     = "__UNKNOWN_ICON_URL__"
+	UnknownLogoURL     = "__UNKNOWN_LOGO_URL__"
 )
 
 // NewWorkspaceListItemFromWorkspace creates a WorkspaceListItem model from a Workspace and WorkspaceKind object.
 // NOTE: the WorkspaceKind might not exist, so we handle the case where it is nil or has no UID.
 func NewWorkspaceListItemFromWorkspace(cfg *config.EnvConfig, ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.WorkspaceKind) WorkspaceListItem {
 	// ensure the provided WorkspaceKind matches the Workspace
-	if wskExists(wsk) && ws.Spec.Kind != wsk.Name {
+	if commonWorkspaces.WskExists(wsk) && ws.Spec.Kind != wsk.Name {
 		panic("provided WorkspaceKind does not match the Workspace")
 	}
 
-	podLabels := make(map[string]string)
-	podAnnotations := make(map[string]string)
-	if ws.Spec.PodTemplate.PodMetadata != nil {
-		// NOTE: we copy the maps to avoid creating a reference to the original maps.
-		for k, v := range ws.Spec.PodTemplate.PodMetadata.Labels {
-			podLabels[k] = v
-		}
-		for k, v := range ws.Spec.PodTemplate.PodMetadata.Annotations {
-			podAnnotations[k] = v
-		}
-	}
-
-	dataVolumes := make([]commonWorkspaces.PodVolumeInfo, len(ws.Spec.PodTemplate.Volumes.Data))
-	for i := range ws.Spec.PodTemplate.Volumes.Data {
-		volume := ws.Spec.PodTemplate.Volumes.Data[i]
-		dataVolumes[i] = commonWorkspaces.PodVolumeInfo{
-			PVCName:   volume.PVCName,
-			MountPath: volume.MountPath,
-			ReadOnly:  ptr.Deref(volume.ReadOnly, false),
-		}
-	}
+	podMetadata := commonWorkspaces.BuildPodMetadata(ws)
+	dataVolumes := commonWorkspaces.BuildDataVolumes(ws)
 
 	imageConfigModel, imageConfigValue := buildImageConfig(ws, wsk)
 	podConfigModel, _ := buildPodConfig(ws, wsk)
 	wskPodTemplatePorts := make(map[kubefloworgv1beta1.PortId]kubefloworgv1beta1.WorkspaceKindPort)
-	if wskExists(wsk) {
+	if commonWorkspaces.WskExists(wsk) {
 		for _, port := range wsk.Spec.PodTemplate.Ports {
 			wskPodTemplatePorts[port.Id] = port
 		}
@@ -80,7 +60,7 @@ func NewWorkspaceListItemFromWorkspace(cfg *config.EnvConfig, ws *kubefloworgv1b
 		Namespace: ws.Namespace,
 		WorkspaceKind: WorkspaceKindInfo{
 			Name:    ws.Spec.Kind,
-			Missing: !wskExists(wsk),
+			Missing: !commonWorkspaces.WskExists(wsk),
 			Icon:    buildIconImageRef(cfg, ws, wsk),
 			Logo:    buildLogoImageRef(cfg, ws, wsk),
 		},
@@ -90,12 +70,9 @@ func NewWorkspaceListItemFromWorkspace(cfg *config.EnvConfig, ws *kubefloworgv1b
 		State:          ws.Status.State,
 		StateMessage:   ws.Status.StateMessage,
 		PodTemplate: PodTemplate{
-			PodMetadata: commonWorkspaces.PodMetadata{
-				Labels:      podLabels,
-				Annotations: podAnnotations,
-			},
+			PodMetadata: podMetadata,
 			Volumes: PodVolumes{
-				Home: buildHomeVolume(ws, wsk),
+				Home: commonWorkspaces.BuildHomeVolume(ws, wsk),
 				Data: dataVolumes,
 			},
 			Options: PodTemplateOptions{
@@ -116,34 +93,11 @@ func NewWorkspaceListItemFromWorkspace(cfg *config.EnvConfig, ws *kubefloworgv1b
 	return workspaceModel
 }
 
-func wskExists(wsk *kubefloworgv1beta1.WorkspaceKind) bool {
-	return wsk != nil && wsk.UID != ""
-}
-
-func buildHomeVolume(ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.WorkspaceKind) *commonWorkspaces.PodVolumeInfo {
-	if ws.Spec.PodTemplate.Volumes.Home == nil {
-		return nil
-	}
-
-	// we only know the mount path if the WorkspaceKind exists
-	homeMountPath := UnknownHomeMountPath
-	if wskExists(wsk) {
-		homeMountPath = wsk.Spec.PodTemplate.VolumeMounts.Home
-	}
-
-	return &commonWorkspaces.PodVolumeInfo{
-		PVCName:   *ws.Spec.PodTemplate.Volumes.Home,
-		MountPath: homeMountPath,
-		// the home volume is ~always~ read-write
-		ReadOnly: false,
-	}
-}
-
 func buildImageConfig(ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.WorkspaceKind) (ImageConfig, *kubefloworgv1beta1.ImageConfigValue) {
 	// create a map of image configs from the WorkspaceKind for easy lookup by ID
 	// NOTE: we can only build this map if the WorkspaceKind exists, otherwise it will be empty
 	imageConfigMap := make(map[string]kubefloworgv1beta1.ImageConfigValue)
-	if wskExists(wsk) {
+	if commonWorkspaces.WskExists(wsk) {
 		imageConfigMap = make(map[string]kubefloworgv1beta1.ImageConfigValue, len(wsk.Spec.PodTemplate.Options.ImageConfig.Values))
 		for _, value := range wsk.Spec.PodTemplate.Options.ImageConfig.Values {
 			imageConfigMap[value.Id] = value
@@ -201,7 +155,7 @@ func buildPodConfig(ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.Wo
 	// create a map of pod configs from the WorkspaceKind for easy lookup by ID
 	// NOTE: we can only build this map if the WorkspaceKind exists, otherwise it will be empty
 	podConfigMap := make(map[string]kubefloworgv1beta1.PodConfigValue)
-	if wskExists(wsk) {
+	if commonWorkspaces.WskExists(wsk) {
 		podConfigMap = make(map[string]kubefloworgv1beta1.PodConfigValue, len(wsk.Spec.PodTemplate.Options.PodConfig.Values))
 		for _, value := range wsk.Spec.PodTemplate.Options.PodConfig.Values {
 			podConfigMap[value.Id] = value
@@ -335,7 +289,7 @@ func buildServices(ws *kubefloworgv1beta1.Workspace, wskPodTemplatePorts map[kub
 
 // buildIconImageRef creates an ImageRef from the icon asset of a WorkspaceKind.
 func buildIconImageRef(cfg *config.EnvConfig, ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.WorkspaceKind) commonAssets.ImageRef {
-	if !wskExists(wsk) {
+	if !commonWorkspaces.WskExists(wsk) {
 		return commonAssets.ImageRef{URL: UnknownIconURL}
 	}
 	return commonAssets.NewImageRefFromWorkspaceKindAssetIcon(cfg, wsk.Spec.Spawner.Icon, wsk.Status.SpawnerIcon, ws.Spec.Kind)
@@ -343,7 +297,7 @@ func buildIconImageRef(cfg *config.EnvConfig, ws *kubefloworgv1beta1.Workspace, 
 
 // buildLogoImageRef creates an ImageRef from the logo asset of a WorkspaceKind.
 func buildLogoImageRef(cfg *config.EnvConfig, ws *kubefloworgv1beta1.Workspace, wsk *kubefloworgv1beta1.WorkspaceKind) commonAssets.ImageRef {
-	if !wskExists(wsk) {
+	if !commonWorkspaces.WskExists(wsk) {
 		return commonAssets.ImageRef{URL: UnknownLogoURL}
 	}
 	return commonAssets.NewImageRefFromWorkspaceKindAssetLogo(cfg, wsk.Spec.Spawner.Logo, wsk.Status.SpawnerLogo, ws.Spec.Kind)
