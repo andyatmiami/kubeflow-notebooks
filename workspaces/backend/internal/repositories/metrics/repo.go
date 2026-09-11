@@ -18,7 +18,7 @@ package metrics
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -104,15 +104,24 @@ type MetricsRepository struct {
 	usageGroup   singleflight.Group
 }
 
-// cachedUsage is the value stored in usageCache. podUID is retained for
-// future observability (e.g., a log/metric on pod-recreation churn) but is
-// intentionally NOT part of the cache key. Dropping podUID from the key trades
+// cachedUsage is the value stored in usageCache.
+//
+// podUID is intentionally NOT part of the cache key and is currently unread.
+// It is retained as an anchor for future observability (e.g., a log/metric on
+// pod-recreation churn) — kept explicitly so that a future contributor sees
+// the deliberate decision rather than re-introducing podUID into the key
+// without realising the trade-off. Dropping podUID from the key trades
 // automatic invalidation on pod recreation for eliminating the informer-copy
 // cost from every cache-hit request; the resulting staleness is bounded by
 // resourceUsageCacheTTL.
+//
+// The pointed-to WorkspaceResourceUsage is shared across all concurrent
+// readers of a given cache entry for up to resourceUsageCacheTTL. Callers
+// MUST treat it as immutable — see the GetWorkspaceResourceUsage godoc.
 type cachedUsage struct {
-	usage  *models.WorkspaceResourceUsage
-	podUID types.UID
+	usage *models.WorkspaceResourceUsage
+	// podUID is intentionally unused today; see the type doc above.
+	podUID types.UID //nolint:unused
 }
 
 // NewMetricsRepository creates a MetricsRepository for accessing workspace metrics.
@@ -139,8 +148,19 @@ func NewMetricsRepository(cfg *config.EnvConfig, c client.Client) *MetricsReposi
 // Workspace.Get + Pod.List + (optionally) PodMetrics.Get; concurrent callers
 // for the same key block on the shared result. The fetch runs on a context
 // detached from the leader's request context so a cancelled leader does not
-// abort the shared work; the Metrics Server call is separately bounded by
-// metricsServerCallTimeout.
+// abort the shared work; only the Metrics Server call itself is bounded (by
+// metricsServerCallTimeout) — informer-served reads (Workspace.Get,
+// Pod.List) are cache-served in-process and are not artificially capped.
+//
+// The returned *models.WorkspaceResourceUsage may be shared with other
+// concurrent callers for up to resourceUsageCacheTTL. Callers MUST treat it
+// as immutable — mutating a returned field would corrupt the cached entry
+// for every subsequent reader until TTL expiry.
+//
+// Panic safety: a panic on the miss path (e.g., in a codec, mapper, or
+// interceptor) is recovered inside the singleflight closure and surfaces as
+// an error to every waiter, rather than crashing the process or aborting
+// every coalesced caller with a re-panic.
 func (r *MetricsRepository) GetWorkspaceResourceUsage(ctx context.Context, ns, workspace string) (*models.WorkspaceResourceUsage, error) {
 	// Cache key format: "<ns>/<workspace>". Collision-safe because Kubernetes
 	// namespace and object names both forbid "/" (DNS-subdomain grammar).
@@ -157,16 +177,26 @@ func (r *MetricsRepository) GetWorkspaceResourceUsage(ctx context.Context, ns, w
 	// select on its own ctx.Done() independently of the leader's context —
 	// otherwise a leader cancellation would propagate to every waiter as
 	// context.Canceled even if their own contexts are still alive.
-	ch := r.usageGroup.DoChan(cacheKey, func() (interface{}, error) {
+	ch := r.usageGroup.DoChan(cacheKey, func() (_ interface{}, retErr error) {
+		// Recover panics before they cross the singleflight boundary.
+		// singleflight.DoChan re-panics into every receiver, so an
+		// un-recovered panic here would kill every coalesced caller.
+		// Convert to a plain error and let the next request retry — do
+		// NOT cache a negative snapshot, panics are anomalous and we want
+		// the next call to exercise the code path fresh.
+		defer func() {
+			if p := recover(); p != nil {
+				retErr = fmt.Errorf("panic during metrics fetch for %q: %v", cacheKey, p)
+			}
+		}()
+
 		// Detach from the leader's ctx so a cancelled leader does not abort
-		// the shared fetch for other waiters, and give it its own bounded
-		// deadline so a wedged Metrics Server cannot pin the singleflight
-		// entry indefinitely.
-		fetchCtx, cancel := context.WithTimeout(
-			context.WithoutCancel(ctx),
-			metricsServerCallTimeout,
-		)
-		defer cancel()
+		// the shared fetch for other waiters. No outer WithTimeout is
+		// applied: informer-served reads (Workspace.Get, Pod.List) are
+		// cache reads in-process and should never block. The Metrics
+		// Server call — the only real network hop — is bounded inside
+		// fetchPodMetrics by metricsServerCallTimeout.
+		fetchCtx := context.WithoutCancel(ctx)
 		return r.fetchAndCacheUsage(fetchCtx, ns, workspace, cacheKey)
 	})
 
@@ -226,34 +256,28 @@ func (r *MetricsRepository) fetchAndCacheUsage(
 	podMetrics, err := r.fetchPodMetrics(ctx, ns, pod.Name)
 	switch {
 	case err != nil:
-		// Distinguish "we ourselves bounded the call and it tripped" from
-		// "the caller went away" — the former is a Metrics Server slowdown
-		// and should be cached briefly so we do not re-attempt on every
-		// poll; the latter is a caller-side event and should propagate.
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
-			// Our bounded deadline expired. Cache a degraded response with
-			// the short negative TTL so the next poll after
-			// resourceUsageNegativeCacheTTL retries against a hopefully
-			// recovered Metrics Server, rather than either (a) hammering
-			// on every request or (b) staying wedged for a full 30 s.
-			result := models.NewWorkspaceResourceUsage(pod, nil)
-			r.usageCache.Add(cacheKey, &cachedUsage{usage: result, podUID: pod.UID}, resourceUsageNegativeCacheTTL)
-			return result, nil
-		}
-		if ctx.Err() != nil {
-			// Caller went away — surface the caller's error, do not cache.
-			return nil, ctx.Err()
-		}
-		// Not-ready / not-found / transport error. Cache briefly so a
-		// warming workspace whose PodMetrics is not yet populated does not
-		// get polled continuously through the warm-up window.
+		// Any error path caches a short-negative snapshot so a warming or
+		// degraded workspace does not get polled continuously through the
+		// negative TTL window. errors.Is(err, context.DeadlineExceeded)
+		// specifically means our own metricsServerCallTimeout tripped —
+		// anything else is a not-ready / not-found / transient transport
+		// error. Both receive the same treatment: a spec-only response,
+		// cached briefly.
+		//
+		// A *caller* cancellation cannot land here — ctx is derived from
+		// context.WithoutCancel in GetWorkspaceResourceUsage, so
+		// ctx.Err() reflects only our own deadlines. Do not introduce a
+		// caller-cancellation branch: doing so would reintroduce the bug
+		// where a leader's cancellation aborts the shared fetch for every
+		// waiter.
 		result := models.NewWorkspaceResourceUsage(pod, nil)
 		r.usageCache.Add(cacheKey, &cachedUsage{usage: result, podUID: pod.UID}, resourceUsageNegativeCacheTTL)
 		return result, nil
 
 	case len(podMetrics.Containers) == 0:
 		// Metrics object exists but container metrics are not populated yet
-		// (same warm-up shape as above). Cache briefly for the same reason.
+		// (typical Metrics Server warm-up). Cache briefly for the same
+		// reason as the error path above.
 		result := models.NewWorkspaceResourceUsage(pod, nil)
 		r.usageCache.Add(cacheKey, &cachedUsage{usage: result, podUID: pod.UID}, resourceUsageNegativeCacheTTL)
 		return result, nil
@@ -268,10 +292,13 @@ func (r *MetricsRepository) fetchAndCacheUsage(
 	return usage, nil
 }
 
-// fetchPodMetrics bounds the upstream Metrics Server call independently of the
-// caller's deadline. The caller may legitimately have a longer or shorter
-// deadline; neither should let a wedged Metrics Server pin request goroutines
-// longer than resourceUsageCacheTTL.
+// fetchPodMetrics bounds the upstream Metrics Server call at
+// metricsServerCallTimeout. This is the ONLY deadline applied on the miss
+// path — callers should pass a context that does not itself impose a
+// deadline (see GetWorkspaceResourceUsage). Bounding at this granularity
+// (only the Metrics Server round-trip, not the whole fetch chain) prevents
+// a slow informer cache from pre-starving the actual network call of its
+// budget.
 func (r *MetricsRepository) fetchPodMetrics(ctx context.Context, ns, podName string) (*metricsv1beta1.PodMetrics, error) {
 	callCtx, cancel := context.WithTimeout(ctx, metricsServerCallTimeout)
 	defer cancel()
@@ -301,6 +328,9 @@ type memoizedProbe struct {
 //     is a legitimate steady state (bare clusters without metrics-server).
 //   - probe returns (result, non-nil err): cached for negTTL. Signals a
 //     transient failure — the underlying state might recover quickly.
+//   - probe panics: caught, treated as a transient failure (negTTL). A
+//     panic here does NOT propagate to callers and does NOT crash the
+//     background refresh goroutine.
 //
 // Concurrency model:
 //
@@ -309,9 +339,11 @@ type memoizedProbe struct {
 //   - Cold start: singleflight coalesces the first-caller burst into a
 //     single probe execution; all callers block on the leader's result.
 //   - Stale-while-revalidate: after warm-up, callers observing a stale
-//     snapshot receive the previous result immediately and kick off a
-//     background refresh. singleflight ensures at most one refresh probe
-//     is ever in flight regardless of concurrency.
+//     snapshot receive the previous result immediately. An atomic gate
+//     (refreshInFlight) ensures that a burst of N stale readers launches
+//     exactly ONE refresh goroutine, not N — saving allocation and
+//     scheduler churn while singleflight is still the belt-and-suspenders
+//     guarantee that the underlying probe runs at most once concurrently.
 //
 // The probe never runs while any other goroutine is blocked waiting on a
 // lock the probe is holding — the old memoize() implementation held a mutex
@@ -319,12 +351,29 @@ type memoizedProbe struct {
 // whatever latency the probe was seeing.
 func memoize(posTTL, negTTL time.Duration, probe func() (bool, error)) func() bool {
 	var (
-		state atomic.Pointer[memoizedProbe]
-		group singleflight.Group
+		state           atomic.Pointer[memoizedProbe]
+		group           singleflight.Group
+		refreshInFlight atomic.Bool
 	)
 
 	sfProbe := func() (interface{}, error) {
-		result, probeErr := probe()
+		// Recover a panicking probe so callers of memoize() and the
+		// background refresh goroutine cannot be surprised by one. A
+		// panic is treated as a transient failure and stored at negTTL,
+		// so recovery is fast if the probe stops panicking.
+		var (
+			result   bool
+			probeErr error
+		)
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					probeErr = fmt.Errorf("panic during metrics API probe: %v", p)
+				}
+			}()
+			result, probeErr = probe()
+		}()
+
 		ttl := posTTL
 		if probeErr != nil {
 			ttl = negTTL
@@ -356,9 +405,21 @@ func memoize(posTTL, negTTL time.Duration, probe func() (bool, error)) func() bo
 		}
 
 		// Stale-while-revalidate: return the last known value immediately,
-		// kick off a background refresh, and let the next caller pick up
-		// the fresh snapshot when the refresh completes.
-		go func() { _, _, _ = group.Do("probe", sfProbe) }()
+		// kick off a background refresh (exactly one, via the atomic gate),
+		// and let the next caller pick up the fresh snapshot when the
+		// refresh completes.
+		if refreshInFlight.CompareAndSwap(false, true) {
+			go func() {
+				// belt-and-suspenders: singleflight re-panics into every
+				// caller of Do() when the fn panics, and this goroutine
+				// has no parent to catch that. sfProbe already recovers,
+				// but a defensive recover here means even a mistake in
+				// sfProbe cannot crash the process.
+				defer func() { _ = recover() }()
+				defer refreshInFlight.Store(false)
+				_, _, _ = group.Do("probe", sfProbe)
+			}()
+		}
 		return cur.result
 	}
 }

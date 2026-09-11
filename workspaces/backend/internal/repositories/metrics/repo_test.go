@@ -19,6 +19,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -335,7 +336,19 @@ var _ = Describe("MetricsRepository.GetWorkspaceResourceUsage", func() {
 		Eventually(errCh).Should(Receive(MatchError(context.Canceled)))
 
 		// Release the interceptor so the background fetch drains cleanly.
+		// The fetch treats the interceptor's synthetic context.Canceled as
+		// a transient PodMetrics failure and populates a short-negative
+		// cache entry. Fencing on that write ensures the test does not
+		// return with an in-flight goroutine still touching r.usageCache
+		// — otherwise a follow-up spec sharing repo state (or the race
+		// detector on a stress run) could observe an unrelated cache
+		// mutation.
 		close(blockFetch)
+		Eventually(func() bool {
+			_, ok := repo.usageCache.Get("default/test-workspace")
+			return ok
+		}, 500*time.Millisecond, 5*time.Millisecond).Should(BeTrue(),
+			"the drained fetch must finish writing to the cache before the spec returns")
 	})
 
 	Context("resource usage cache — hit path", func() {
@@ -678,6 +691,78 @@ var _ = Describe("MetricsRepository.GetWorkspaceResourceUsage", func() {
 			Expect(metricsQueryCount["pod-3"]).To(Equal(1))
 		})
 	})
+
+	Context("panic safety on the miss path — review finding #2", func() {
+		It("recovers from a panicking client call and surfaces an error to every coalesced waiter (no crash, no re-panic)", func() {
+			// singleflight.DoChan re-panics into every receiver. Without
+			// the DoChan-closure recover, a codec/mapper panic in
+			// client.Get would kill every concurrent request in the
+			// coalescing window — and, worse, take down the process
+			// because there is no HTTP-handler frame to catch the panic
+			// when the receiver goroutines are our test goroutines.
+			pod := workspacePod("pod-panic", "container-panic", corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("100m"),
+			})
+			cli := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(testWorkspaceCR()).
+				WithLists(&corev1.PodList{Items: []corev1.Pod{*pod}}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, cli client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, isMetrics := obj.(*metricsv1beta1.PodMetrics); isMetrics {
+							panic("simulated codec panic during PodMetrics.Get")
+						}
+						return cli.Get(ctx, key, obj, opts...)
+					},
+				}).
+				Build()
+			repo := newTestMetricsRepository(cli, true, resourceUsageCacheMaxCapacity)
+
+			// Fire N concurrent callers so they land inside the same
+			// singleflight coalescing window; each MUST receive an error
+			// (not re-panic, not crash the goroutine).
+			const N = 8
+			errs := make(chan error, N)
+			var wg sync.WaitGroup
+			wg.Add(N)
+			for i := 0; i < N; i++ {
+				go func() {
+					defer wg.Done()
+					// If the panic escapes, this defer never runs and the
+					// test process dies. Wrap belt-and-suspenders so the
+					// spec reports failure rather than the whole suite
+					// aborting.
+					defer func() {
+						if p := recover(); p != nil {
+							errs <- fmt.Errorf("panic escaped: %v", p)
+							return
+						}
+					}()
+					_, err := repo.GetWorkspaceResourceUsage(ctx, "default", "test-workspace")
+					errs <- err
+				}()
+			}
+			wg.Wait()
+			close(errs)
+
+			count := 0
+			for err := range errs {
+				count++
+				Expect(err).To(HaveOccurred(),
+					"every coalesced caller must receive an error, not a panic")
+				Expect(err.Error()).To(ContainSubstring("panic during metrics fetch"),
+					"the recovered panic must surface as a clearly-labelled error")
+			}
+			Expect(count).To(Equal(N))
+
+			// The panic must NOT poison the cache — a subsequent request
+			// after the interceptor is removed should retry the fetch,
+			// not be blocked by a cached error snapshot.
+			_, ok := repo.usageCache.Get("default/test-workspace")
+			Expect(ok).To(BeFalse(),
+				"a panic must not populate the cache; the next request should retry")
+		})
+	})
 })
 
 var _ = Describe("metricsAPIServed", func() {
@@ -831,6 +916,46 @@ var _ = Describe("memoize", func() {
 		// one refresh probe executed.
 		probeGate <- struct{}{}
 		Eventually(func() int32 { return atomic.LoadInt32(&calls) }).Should(BeNumerically(">=", 2))
+	})
+
+	It("recovers from a panicking probe — caches negative snapshot, does not crash the SWR goroutine (review finding #1)", func() {
+		// A panicking probe MUST NOT: (a) crash the process via the
+		// bare SWR goroutine (no request-handler frame to catch it),
+		// (b) propagate through singleflight into the cold-start caller
+		// as a re-panic, or (c) poison state indefinitely — a panic is
+		// treated as a transient failure and cached at negTTL so
+		// recovery is fast once the probe stops panicking.
+		var (
+			calls          int32
+			shouldPanic    atomic.Bool
+			recoverySignal = make(chan struct{}, 8)
+		)
+		shouldPanic.Store(true)
+
+		available := memoize(time.Minute, 5*time.Millisecond, func() (bool, error) {
+			atomic.AddInt32(&calls, 1)
+			if shouldPanic.Load() {
+				panic("simulated RESTMapper panic")
+			}
+			recoverySignal <- struct{}{}
+			return true, nil
+		})
+
+		// Cold-start probe panics — the caller receives the zero value
+		// (false) and does NOT crash.
+		Expect(available()).To(BeFalse())
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(1)))
+
+		// negTTL applied — next call after 10ms should re-probe.
+		time.Sleep(15 * time.Millisecond)
+
+		// Stop panicking, then trigger a stale refresh; the SWR
+		// goroutine must survive prior panics and now succeed.
+		shouldPanic.Store(false)
+		_ = available()
+		Eventually(recoverySignal, 200*time.Millisecond, 5*time.Millisecond).Should(Receive(),
+			"the SWR goroutine must survive prior panics and eventually run a healthy probe")
+		Eventually(available).Should(BeTrue())
 	})
 })
 
