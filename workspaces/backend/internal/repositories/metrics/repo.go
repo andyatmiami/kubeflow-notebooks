@@ -383,6 +383,12 @@ func memoize(posTTL, negTTL time.Duration, probe func() (bool, error)) func() bo
 			capturedAt: time.Now(),
 			ttl:        ttl,
 		})
+		// Publication of the probe result happens via state.Store above —
+		// warm-path callers of the returned function read via state.Load
+		// and never participate in this singleflight call. The
+		// (interface{}, error) return signature is required by
+		// singleflight.Group.Do; both cold-start and SWR call sites
+		// discard these values, so returning nil, nil is correct.
 		return nil, nil
 	}
 
