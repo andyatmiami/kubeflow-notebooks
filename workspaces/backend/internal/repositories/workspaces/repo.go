@@ -308,9 +308,6 @@ func (r *WorkspaceRepository) UpdateWorkspace(ctx context.Context, actor user.In
 		if apierrors.IsNotFound(err) {
 			return nil, repoCommon.ErrWorkspaceNotFound
 		}
-		if apierrors.IsConflict(err) {
-			return nil, ErrWorkspaceRevisionConflict
-		}
 		if apierrors.IsInvalid(err) {
 			// NOTE: we don't wrap this error so we can unpack it in the caller
 			//       and extract the validation errors returned by the Kubernetes API server
