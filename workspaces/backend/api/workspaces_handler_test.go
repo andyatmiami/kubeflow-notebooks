@@ -628,6 +628,10 @@ var _ = Describe("Workspaces Handler", func() {
 			wskImageDeny     = "wsk-fr-image-deny"
 			wskPodDeny       = "wsk-fr-pod-deny"
 			wskWorkspaceHide = "wsk-fr-wsk-hidden"
+			wskImageHide     = "wsk-fr-image-hide"
+			wskImageHideDeny = "wsk-fr-image-hide-deny"
+			wskPodHide       = "wsk-fr-pod-hide"
+			wskPodHideDeny   = "wsk-fr-pod-hide-deny"
 
 			imageDenyMessage = "this image is restricted by admin policy"
 			podDenyMessage   = "this pod config is restricted by admin policy"
@@ -778,6 +782,26 @@ var _ = Describe("Workspaces Handler", func() {
 			}),
 			makeFilterRuleTestWSK(wskWorkspaceHide, []kubefloworgv1beta1.FilterRule{
 				workspaceKindRule(kubefloworgv1beta1.FilterRuleEffectAPI{Hide: new(true)}),
+			}),
+			makeFilterRuleTestWSK(wskImageHide, []kubefloworgv1beta1.FilterRule{
+				imageConfigRule(kubefloworgv1beta1.FilterRuleEffectAPI{Hide: new(true)}),
+			}),
+			makeFilterRuleTestWSK(wskImageHideDeny, []kubefloworgv1beta1.FilterRule{
+				imageConfigRule(kubefloworgv1beta1.FilterRuleEffectAPI{
+					Hide:        new(true),
+					Deny:        new(true),
+					DenyMessage: &kubefloworgv1beta1.FilterRuleDenyMessage{Text: imageDenyMessage},
+				}),
+			}),
+			makeFilterRuleTestWSK(wskPodHide, []kubefloworgv1beta1.FilterRule{
+				podConfigRule(kubefloworgv1beta1.FilterRuleEffectAPI{Hide: new(true)}),
+			}),
+			makeFilterRuleTestWSK(wskPodHideDeny, []kubefloworgv1beta1.FilterRule{
+				podConfigRule(kubefloworgv1beta1.FilterRuleEffectAPI{
+					Hide:        new(true),
+					Deny:        new(true),
+					DenyMessage: &kubefloworgv1beta1.FilterRuleDenyMessage{Text: podDenyMessage},
+				}),
 			}),
 		}
 
@@ -1024,6 +1048,180 @@ var _ = Describe("Workspaces Handler", func() {
 			defer rs.Body.Close()
 
 			Expect(rs.StatusCode).To(Equal(http.StatusOK), descUnexpectedHTTPStatus, rr.Body.String())
+		})
+
+		It("rejects Workspace create with 422 when the selected imageConfig is hidden", func() {
+			workspaceCreate := &models.WorkspaceCreate{
+				Name: "ws-hidden-image",
+				Kind: wskImageHide,
+				PodTemplate: models.PodTemplateMutate{
+					Options: models.PodTemplateOptionsMutate{
+						ImageConfig: "restricted_image",
+						PodConfig:   "tiny_cpu",
+					},
+				},
+			}
+			bodyJSON, err := json.Marshal(WorkspaceCreateEnvelope{Data: workspaceCreate})
+			Expect(err).NotTo(HaveOccurred())
+
+			path := strings.Replace(constants.WorkspacesByNamespacePath, ":"+constants.NamespacePathParam, namespaceNameFR, 1)
+			req, err := http.NewRequest(http.MethodPost, path, strings.NewReader(string(bodyJSON)))
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set("Content-Type", constants.MediaTypeJson)
+			req.Header.Set(userIdHeader, adminUser)
+
+			rr := httptest.NewRecorder()
+			ps := httprouter.Params{{Key: constants.NamespacePathParam, Value: namespaceNameFR}}
+			a.CreateWorkspaceHandler(rr, req, ps)
+			rs := rr.Result()
+			defer rs.Body.Close()
+
+			Expect(rs.StatusCode).To(Equal(http.StatusUnprocessableEntity), descUnexpectedHTTPStatus, rr.Body.String())
+
+			var errEnv ErrorEnvelope
+			Expect(json.Unmarshal(rr.Body.Bytes(), &errEnv)).To(Succeed())
+			Expect(errEnv.Error.Cause.ValidationErrors).To(HaveLen(1))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field":   Equal("spec.podTemplate.options.imageConfig"),
+					"Message": ContainSubstring(`image config option "restricted_image" is hidden`),
+				}),
+			))
+		})
+
+		It("emits both HIDE and DENY validation errors when the selected imageConfig is hidden and denied", func() {
+			workspaceCreate := &models.WorkspaceCreate{
+				Name: "ws-hidden-denied-image",
+				Kind: wskImageHideDeny,
+				PodTemplate: models.PodTemplateMutate{
+					Options: models.PodTemplateOptionsMutate{
+						ImageConfig: "restricted_image",
+						PodConfig:   "tiny_cpu",
+					},
+				},
+			}
+			bodyJSON, err := json.Marshal(WorkspaceCreateEnvelope{Data: workspaceCreate})
+			Expect(err).NotTo(HaveOccurred())
+
+			path := strings.Replace(constants.WorkspacesByNamespacePath, ":"+constants.NamespacePathParam, namespaceNameFR, 1)
+			req, err := http.NewRequest(http.MethodPost, path, strings.NewReader(string(bodyJSON)))
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set("Content-Type", constants.MediaTypeJson)
+			req.Header.Set(userIdHeader, adminUser)
+
+			rr := httptest.NewRecorder()
+			ps := httprouter.Params{{Key: constants.NamespacePathParam, Value: namespaceNameFR}}
+			a.CreateWorkspaceHandler(rr, req, ps)
+			rs := rr.Result()
+			defer rs.Body.Close()
+
+			Expect(rs.StatusCode).To(Equal(http.StatusUnprocessableEntity), descUnexpectedHTTPStatus, rr.Body.String())
+
+			var errEnv ErrorEnvelope
+			Expect(json.Unmarshal(rr.Body.Bytes(), &errEnv)).To(Succeed())
+			Expect(errEnv.Error.Cause.ValidationErrors).To(HaveLen(2))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field":   Equal("spec.podTemplate.options.imageConfig"),
+					"Message": ContainSubstring(`image config option "restricted_image" is hidden`),
+				}),
+			))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field": Equal("spec.podTemplate.options.imageConfig"),
+					"Message": SatisfyAll(
+						ContainSubstring(`image config option "restricted_image" is restricted`),
+						ContainSubstring(imageDenyMessage),
+					),
+				}),
+			))
+		})
+
+		It("rejects Workspace create with 422 when the selected podConfig is hidden", func() {
+			workspaceCreate := &models.WorkspaceCreate{
+				Name: "ws-hidden-pod",
+				Kind: wskPodHide,
+				PodTemplate: models.PodTemplateMutate{
+					Options: models.PodTemplateOptionsMutate{
+						ImageConfig: "jupyterlab_scipy_180",
+						PodConfig:   "restricted_pod",
+					},
+				},
+			}
+			bodyJSON, err := json.Marshal(WorkspaceCreateEnvelope{Data: workspaceCreate})
+			Expect(err).NotTo(HaveOccurred())
+
+			path := strings.Replace(constants.WorkspacesByNamespacePath, ":"+constants.NamespacePathParam, namespaceNameFR, 1)
+			req, err := http.NewRequest(http.MethodPost, path, strings.NewReader(string(bodyJSON)))
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set("Content-Type", constants.MediaTypeJson)
+			req.Header.Set(userIdHeader, adminUser)
+
+			rr := httptest.NewRecorder()
+			ps := httprouter.Params{{Key: constants.NamespacePathParam, Value: namespaceNameFR}}
+			a.CreateWorkspaceHandler(rr, req, ps)
+			rs := rr.Result()
+			defer rs.Body.Close()
+
+			Expect(rs.StatusCode).To(Equal(http.StatusUnprocessableEntity), descUnexpectedHTTPStatus, rr.Body.String())
+
+			var errEnv ErrorEnvelope
+			Expect(json.Unmarshal(rr.Body.Bytes(), &errEnv)).To(Succeed())
+			Expect(errEnv.Error.Cause.ValidationErrors).To(HaveLen(1))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field":   Equal("spec.podTemplate.options.podConfig"),
+					"Message": ContainSubstring(`pod config option "restricted_pod" is hidden`),
+				}),
+			))
+		})
+
+		It("emits both HIDE and DENY validation errors when the selected podConfig is hidden and denied", func() {
+			workspaceCreate := &models.WorkspaceCreate{
+				Name: "ws-hidden-denied-pod",
+				Kind: wskPodHideDeny,
+				PodTemplate: models.PodTemplateMutate{
+					Options: models.PodTemplateOptionsMutate{
+						ImageConfig: "jupyterlab_scipy_180",
+						PodConfig:   "restricted_pod",
+					},
+				},
+			}
+			bodyJSON, err := json.Marshal(WorkspaceCreateEnvelope{Data: workspaceCreate})
+			Expect(err).NotTo(HaveOccurred())
+
+			path := strings.Replace(constants.WorkspacesByNamespacePath, ":"+constants.NamespacePathParam, namespaceNameFR, 1)
+			req, err := http.NewRequest(http.MethodPost, path, strings.NewReader(string(bodyJSON)))
+			Expect(err).NotTo(HaveOccurred())
+			req.Header.Set("Content-Type", constants.MediaTypeJson)
+			req.Header.Set(userIdHeader, adminUser)
+
+			rr := httptest.NewRecorder()
+			ps := httprouter.Params{{Key: constants.NamespacePathParam, Value: namespaceNameFR}}
+			a.CreateWorkspaceHandler(rr, req, ps)
+			rs := rr.Result()
+			defer rs.Body.Close()
+
+			Expect(rs.StatusCode).To(Equal(http.StatusUnprocessableEntity), descUnexpectedHTTPStatus, rr.Body.String())
+
+			var errEnv ErrorEnvelope
+			Expect(json.Unmarshal(rr.Body.Bytes(), &errEnv)).To(Succeed())
+			Expect(errEnv.Error.Cause.ValidationErrors).To(HaveLen(2))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field":   Equal("spec.podTemplate.options.podConfig"),
+					"Message": ContainSubstring(`pod config option "restricted_pod" is hidden`),
+				}),
+			))
+			Expect(errEnv.Error.Cause.ValidationErrors).To(ContainElement(
+				MatchFields(IgnoreExtras, Fields{
+					"Field": Equal("spec.podTemplate.options.podConfig"),
+					"Message": SatisfyAll(
+						ContainSubstring(`pod config option "restricted_pod" is restricted`),
+						ContainSubstring(podDenyMessage),
+					),
+				}),
+			))
 		})
 	})
 
