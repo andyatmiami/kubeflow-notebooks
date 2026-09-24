@@ -53,12 +53,31 @@ var (
 // filterRule for the target namespace (as opposed to a specific imageConfig/podConfig
 // option being restricted - see enforceImageConfigFilterRule / enforcePodConfigFilterRule
 // for those cases).
+//
+// Hidden and DenyMessage are independent signals:
+//   - Hidden reports that the WorkspaceKind is hidden (APIHide) for this namespace.
+//   - DenyMessage carries the operator-supplied text on a Deny effect.
+//
+// If both Hide and Deny apply, Hide wins - the constructor only emits Hidden in that
+// case to avoid leaking the DenyMessage for a workspace kind the caller is not allowed
+// to know exists. DenyMessage is therefore only ever non-empty when Hidden is false.
 type WorkspaceKindRestrictedError struct {
-	Message string
+	Kind        string
+	Mutation    wsMutationType
+	Hidden      bool
+	DenyMessage string
 }
 
 func (e *WorkspaceKindRestrictedError) Error() string {
-	return e.Message
+	suffix := "is restricted"
+	if e.Hidden {
+		suffix = "is hidden"
+	}
+	msg := fmt.Sprintf("workspace %s not allowed: workspace kind %q %s", e.Mutation, e.Kind, suffix)
+	if !e.Hidden && e.DenyMessage != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.DenyMessage)
+	}
+	return msg
 }
 
 type WorkspaceRepository struct {
@@ -328,16 +347,23 @@ func (r *WorkspaceRepository) enforceWorkspaceKindFilterRules(
 	result := filterrules.EvaluateWorkspaceKindFilterScopeRule(workspaceKind, namespaceLabels)
 
 	if result.APIHide {
-		msg := fmt.Sprintf("workspace %s not allowed: workspace kind %q is hidden", mutation, workspaceKind.Name)
-		return &WorkspaceKindRestrictedError{Message: msg}
+		return &WorkspaceKindRestrictedError{
+			Kind:     workspaceKind.Name,
+			Mutation: mutation,
+			Hidden:   true,
+		}
 	}
 
 	if result.Restrictions.Deny {
-		msg := fmt.Sprintf("workspace %s not allowed: workspace kind %q is restricted", mutation, workspaceKind.Name)
-		if result.Restrictions.DenyMessage != nil && result.Restrictions.DenyMessage.Text != "" {
-			msg = fmt.Sprintf("%s: %s", msg, result.Restrictions.DenyMessage.Text)
+		var denyMsg string
+		if result.Restrictions.DenyMessage != nil {
+			denyMsg = result.Restrictions.DenyMessage.Text
 		}
-		return &WorkspaceKindRestrictedError{Message: msg}
+		return &WorkspaceKindRestrictedError{
+			Kind:        workspaceKind.Name,
+			Mutation:    mutation,
+			DenyMessage: denyMsg,
+		}
 	}
 
 	return nil
