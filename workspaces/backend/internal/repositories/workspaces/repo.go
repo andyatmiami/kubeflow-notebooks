@@ -449,9 +449,10 @@ func (r *WorkspaceRepository) enforcePodConfigFilterRule(
 
 // findImageConfigValue returns the imageConfig value with the given id, or nil if not found.
 func findImageConfigValue(wsk *kubefloworgv1beta1.WorkspaceKind, id string) *kubefloworgv1beta1.ImageConfigValue {
-	for i := range wsk.Spec.PodTemplate.Options.ImageConfig.Values {
-		if wsk.Spec.PodTemplate.Options.ImageConfig.Values[i].Id == id {
-			return &wsk.Spec.PodTemplate.Options.ImageConfig.Values[i]
+	values := wsk.Spec.PodTemplate.Options.ImageConfig.Values
+	for i := range values {
+		if values[i].Id == id {
+			return &values[i]
 		}
 	}
 	return nil
@@ -459,9 +460,10 @@ func findImageConfigValue(wsk *kubefloworgv1beta1.WorkspaceKind, id string) *kub
 
 // findPodConfigValue returns the podConfig value with the given id, or nil if not found.
 func findPodConfigValue(wsk *kubefloworgv1beta1.WorkspaceKind, id string) *kubefloworgv1beta1.PodConfigValue {
-	for i := range wsk.Spec.PodTemplate.Options.PodConfig.Values {
-		if wsk.Spec.PodTemplate.Options.PodConfig.Values[i].Id == id {
-			return &wsk.Spec.PodTemplate.Options.PodConfig.Values[i]
+	values := wsk.Spec.PodTemplate.Options.PodConfig.Values
+	for i := range values {
+		if values[i].Id == id {
+			return &values[i]
 		}
 	}
 	return nil
