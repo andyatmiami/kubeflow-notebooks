@@ -49,6 +49,8 @@ const basePodConfigTest: OptionsPodConfigValue = {
   hidden: false,
   clusterMetrics: undefined,
   restrictions: { deny: false },
+  podMetadata: { labels: {}, annotations: {} },
+  statefulSetMetadata: { labels: {}, annotations: {} },
 };
 
 describe('useWorkspaceCountPerKind', () => {
@@ -66,6 +68,7 @@ describe('useWorkspaceCountPerKind', () => {
       deleteWorkspace: jest.fn(),
       getWorkspacePodTemplateDetails: jest.fn(),
       getWorkspacePodTemplateLogsBatch: jest.fn(),
+      getWorkspacePodTemplateResources: jest.fn(),
     },
     workspaceKinds: {
       listWorkspaceKinds: mockListWorkspaceKinds,
@@ -128,7 +131,9 @@ describe('useWorkspaceCountPerKind', () => {
         clusterMetrics: { workspacesCount: 10 },
         podTemplate: {
           podMetadata: { labels: {}, annotations: {} },
-          volumeMounts: { home: '/home' },
+          statefulSetMetadata: { labels: {}, annotations: {} },
+          serviceAccount: { metadata: { labels: {}, annotations: {} } },
+          volumeMountPaths: { home: '/home' },
           options: {
             imageConfig: {
               default: 'image1',
@@ -168,7 +173,9 @@ describe('useWorkspaceCountPerKind', () => {
         clusterMetrics: { workspacesCount: 20 },
         podTemplate: {
           podMetadata: { labels: {}, annotations: {} },
-          volumeMounts: { home: '/home' },
+          statefulSetMetadata: { labels: {}, annotations: {} },
+          serviceAccount: { metadata: { labels: {}, annotations: {} } },
+          volumeMountPaths: { home: '/home' },
           options: {
             imageConfig: {
               default: 'image1',
@@ -241,7 +248,9 @@ describe('useWorkspaceCountPerKind', () => {
         clusterMetrics: { workspacesCount: 0 },
         podTemplate: {
           podMetadata: { labels: {}, annotations: {} },
-          volumeMounts: { home: '/home' },
+          statefulSetMetadata: { labels: {}, annotations: {} },
+          serviceAccount: { metadata: { labels: {}, annotations: {} } },
+          volumeMountPaths: { home: '/home' },
           options: {
             imageConfig: {
               default: baseImageConfigTest.id,
@@ -259,7 +268,9 @@ describe('useWorkspaceCountPerKind', () => {
         clusterMetrics: { workspacesCount: 0 },
         podTemplate: {
           podMetadata: { labels: {}, annotations: {} },
-          volumeMounts: { home: '/home' },
+          statefulSetMetadata: { labels: {}, annotations: {} },
+          serviceAccount: { metadata: { labels: {}, annotations: {} } },
+          volumeMountPaths: { home: '/home' },
           options: {
             imageConfig: {
               default: 'empty',
@@ -333,7 +344,9 @@ describe('useWorkspaceCountPerKind', () => {
       clusterMetrics: { workspacesCount: 0 },
       podTemplate: {
         podMetadata: { labels: {}, annotations: {} },
-        volumeMounts: { home: '/home' },
+        statefulSetMetadata: { labels: {}, annotations: {} },
+        serviceAccount: { metadata: { labels: {}, annotations: {} } },
+        volumeMountPaths: { home: '/home' },
         options: {
           imageConfig: {
             default: baseImageConfigTest.id,

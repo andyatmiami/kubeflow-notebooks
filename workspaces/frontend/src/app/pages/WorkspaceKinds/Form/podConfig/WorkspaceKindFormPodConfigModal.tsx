@@ -12,29 +12,55 @@ import { Switch } from '@patternfly/react-core/dist/esm/components/Switch';
 import { HelperText } from '@patternfly/react-core/dist/esm/components/HelperText';
 import { WorkspaceKindPodConfigValue } from '~/app/types';
 import { EditableRowsTable, KeyValueRow } from '~/app/pages/WorkspaceKinds/Form/EditableRowsTable';
-import { getResources } from '~/app/pages/WorkspaceKinds/Form/helpers';
-import { OptionsOptionLabel } from '~/generated/data-contracts';
+import {
+  getResources,
+  getRedirectMessageError,
+  normalizeRedirect,
+} from '~/app/pages/WorkspaceKinds/Form/helpers';
+import { OptionsOptionLabel, OptionsOptionRedirect } from '~/generated/data-contracts';
 import ThemeAwareFormGroupWrapper from '~/shared/components/ThemeAwareFormGroupWrapper';
+import { WorkspaceKindFormRedirect } from '~/app/pages/WorkspaceKinds/Form/WorkspaceKindFormRedirect';
 import { WorkspaceKindFormResource, PodResourceEntry } from './WorkspaceKindFormResource';
+import { getResourceErrors, requiresMatchingResources } from './resourceValidation';
+
+const getEditableResources = (config: WorkspaceKindPodConfigValue): PodResourceEntry[] =>
+  getResources(config).map((resource) =>
+    requiresMatchingResources(resource.type)
+      ? { ...resource, request: '', limit: resource.limit || resource.request }
+      : resource,
+  );
 
 interface WorkspaceKindFormPodConfigModalProps {
+  mode?: string;
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (podConfig: WorkspaceKindPodConfigValue) => void;
   editIndex: number | null;
   currConfig: WorkspaceKindPodConfigValue;
   setCurrConfig: (currConfig: WorkspaceKindPodConfigValue) => void;
+  podConfigOptions?: WorkspaceKindPodConfigValue[];
 }
 
-export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfigModalProps> = ({
+export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfigModalProps> = (
+  props,
+) => (
+  <WorkspaceKindFormPodConfigModalContent
+    key={`${props.isOpen}-${props.editIndex}-${props.currConfig.id}`}
+    {...props}
+  />
+);
+
+const WorkspaceKindFormPodConfigModalContent: React.FC<WorkspaceKindFormPodConfigModalProps> = ({
+  mode,
   isOpen,
   onClose,
   onSubmit,
   editIndex,
   currConfig,
   setCurrConfig,
+  podConfigOptions,
 }) => {
-  const initialResources = useMemo(() => getResources(currConfig), [currConfig]);
+  const initialResources = useMemo(() => getEditableResources(currConfig), [currConfig]);
 
   const [resources, setResources] = useState<PodResourceEntry[]>(initialResources);
   const [labels, setLabels] = useState<OptionsOptionLabel[]>(currConfig.labels ?? []);
@@ -45,13 +71,17 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
   const [displayName, setDisplayName] = useState(currConfig.displayName);
   const [description, setDescription] = useState(currConfig.description);
   const [hidden, setHidden] = useState<boolean>(currConfig.hidden || false);
+  const [redirect, setRedirect] = useState<OptionsOptionRedirect>(
+    currConfig.redirect || { to: '' },
+  );
 
   useEffect(() => {
-    setResources(getResources(currConfig));
+    setResources(getEditableResources(currConfig));
     setId(currConfig.id);
     setDisplayName(currConfig.displayName);
     setDescription(currConfig.description);
     setHidden(currConfig.hidden || false);
+    setRedirect(currConfig.redirect || { to: '' });
     setLabels(currConfig.labels ?? []);
     setNodeSelectors(
       Object.entries(currConfig.nodeSelector ?? {}).map(([key, value]) => ({ key, value })),
@@ -67,7 +97,7 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
           if (r.limit.length) {
             acc.limits[r.type] = r.limit;
           }
-          if (r.request.length) {
+          if (r.request.length && !requiresMatchingResources(r.type)) {
             acc.requests[r.type] = r.request;
           }
         }
@@ -81,8 +111,26 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
     return parsedResources;
   }, []);
 
+  const candidateTargets = useMemo(
+    () =>
+      (podConfigOptions ?? [])
+        .filter((opt) => opt.id && opt.id !== id && opt.id !== currConfig.id)
+        .map((opt) => ({ id: opt.id, displayName: opt.displayName })),
+    [podConfigOptions, id, currConfig.id],
+  );
+
+  const hasResourceErrors = resources.some((resource) => getResourceErrors(resource).length > 0);
+  const isMissingRedirectTarget =
+    Boolean(redirect.to) && !candidateTargets.some((target) => target.id === redirect.to);
+  const hasRedirectError = Boolean(getRedirectMessageError(redirect)) || isMissingRedirectTarget;
+
   const handleSubmit = useCallback(() => {
-    const updatedConfig = {
+    if (hasResourceErrors || hasRedirectError) {
+      return;
+    }
+    const finalRedirect = normalizeRedirect(redirect);
+
+    const updatedConfig: WorkspaceKindPodConfigValue = {
       ...currConfig,
       id,
       displayName,
@@ -93,6 +141,7 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
       nodeSelector: Object.fromEntries(
         nodeSelectors.filter((ns) => ns.key.length > 0).map(({ key, value }) => [key, value]),
       ),
+      redirect: finalRedirect,
     };
     setCurrConfig(updatedConfig);
     onSubmit(updatedConfig);
@@ -100,12 +149,15 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
     currConfig,
     description,
     displayName,
+    hasRedirectError,
+    hasResourceErrors,
     hidden,
     id,
     labels,
     mergeResourceLabels,
     nodeSelectors,
     onSubmit,
+    redirect,
     resources,
     setCurrConfig,
   ]);
@@ -219,6 +271,16 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
             memory={memoryResource}
             custom={customResources}
           />
+          {mode === 'edit' && (
+            <WorkspaceKindFormRedirect
+              redirect={redirect}
+              setRedirect={setRedirect}
+              candidateTargets={candidateTargets}
+              fieldIdPrefix="workspace-kind-pod-config-redirect"
+              targetLabel="Redirect To"
+              entityType="pod configuration"
+            />
+          )}
         </Form>
       </ModalBody>
       <ModalFooter>
@@ -226,6 +288,7 @@ export const WorkspaceKindFormPodConfigModal: React.FC<WorkspaceKindFormPodConfi
           key="confirm"
           variant="primary"
           onClick={handleSubmit}
+          isDisabled={hasResourceErrors || hasRedirectError}
           data-testid="pod-config-modal-submit-button"
         >
           {editIndex !== null ? 'Save' : 'Create'}

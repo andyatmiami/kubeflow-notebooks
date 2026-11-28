@@ -8,7 +8,6 @@ import {
   V1PersistentVolumeMode,
   V1PersistentVolumeReclaimPolicy,
   V1PodPhase,
-  V1SecretType,
   WorkspacekindsWorkspaceKindListItem,
   WorkspacesRedirectMessageLevel,
   WorkspacesWorkspaceListItem,
@@ -20,6 +19,7 @@ import {
   buildMockPVC,
   buildMockPVCCreate,
   buildMockSecret,
+  buildMockSecretResponse,
   buildMockStorageClass,
   buildMockWorkspace,
   buildMockWorkspaceCreate,
@@ -74,11 +74,13 @@ export const mockWorkspaceKind3: WorkspacekindsWorkspaceKindListItem = buildMock
         secondsSinceActive: 3600,
         minRunningSeconds: 300,
       },
-      match: {
-        matchNamespace: {
-          selector: { matchLabels: { tier: 'development' } },
+      match: [
+        {
+          matchNamespace: {
+            selector: { matchLabels: { tier: 'development' } },
+          },
         },
-      },
+      ],
       effect: {
         pauseWorkspace: true,
       },
@@ -340,24 +342,12 @@ export const mockWorkspaceCreate = buildMockWorkspaceCreate({});
 export const mockWorkspaceUpdate = buildMockWorkspaceUpdate({});
 export const mockSecretCreate: SecretsSecretCreate = {
   name: 'secret-1',
-  type: V1SecretType.SecretTypeOpaque,
-  immutable: false,
-  contents: {
-    username: {
-      base64: 'abcd',
-    },
-    password: {},
-  },
+  ...buildMockSecretResponse(),
 };
 
 export const mockSecretCreate3: SecretsSecretCreate = {
   name: 'secret-3',
-  type: V1SecretType.SecretTypeOpaque,
-  immutable: false,
-  contents: {
-    apiKey: {},
-    apiSecret: {},
-  },
+  ...buildMockSecretResponse({ contents: { apiKey: {}, apiSecret: {} } }),
 };
 
 export const mockSecretsList = [
@@ -639,5 +629,7 @@ export const mockListValuesPodConfigs: OptionsPodConfigValue[] = [
       { key: 'gpu', value: '1' },
     ],
     restrictions: { deny: false },
+    podMetadata: { labels: {}, annotations: {} },
+    statefulSetMetadata: { labels: {}, annotations: {} },
   },
 ];

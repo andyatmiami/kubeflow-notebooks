@@ -8,13 +8,16 @@ import {
 } from '~/app/types';
 import {
   OptionsOptionLabel,
+  OptionsOptionRedirect,
   OptionsPodConfigValue,
+  OptionsRedirectMessageLevel,
   V1Beta1OptionRedirect,
   V1Beta1RedirectMessageLevel,
   V1PullPolicy,
   V1ResourceList,
   V1Toleration,
   V1TolerationOperator,
+  WorkspacekindsActivityRuleMatch,
   WorkspacekindsWorkspaceKindUpdate,
 } from '~/generated/data-contracts';
 import { PodResourceEntry } from './podConfig/WorkspaceKindFormResource';
@@ -168,6 +171,14 @@ export const emptyPodConfig: OptionsPodConfigValue = {
   restrictions: {
     deny: false,
   },
+  podMetadata: {
+    labels: {},
+    annotations: {},
+  },
+  statefulSetMetadata: {
+    labels: {},
+    annotations: {},
+  },
 };
 
 export const EMPTY_WORKSPACE_KIND_FORM_DATA = {
@@ -193,7 +204,7 @@ export const EMPTY_WORKSPACE_KIND_FORM_DATA = {
       labels: {},
       annotations: {},
     },
-    volumeMounts: {
+    volumeMountPaths: {
       home: '',
     },
     extraVolumeMounts: [],
@@ -217,6 +228,42 @@ export const emptyActivityRule = (): ActivityRuleEntry => ({
   },
 });
 
+type ActivityRuleMatcherKey = keyof WorkspacekindsActivityRuleMatch;
+
+/**
+ * Merges the matchLabels of every condition using the given matcher. Conditions are ANDed,
+ * so merging preserves their meaning; matchExpressions are not represented.
+ */
+export const getActivityRuleMatchLabels = (
+  match: WorkspacekindsActivityRuleMatch[] | undefined,
+  matcher: ActivityRuleMatcherKey,
+): Record<string, string> | undefined => {
+  const merged = (match ?? []).reduce<Record<string, string>>(
+    (acc, condition) => ({ ...acc, ...condition[matcher]?.selector.matchLabels }),
+    {},
+  );
+  return Object.keys(merged).length > 0 ? merged : undefined;
+};
+
+/**
+ * Builds an activity rule match list with at most one condition per matcher.
+ * Returns undefined when no labels are given, making the rule a catch-all.
+ */
+export const buildActivityRuleMatch = (labels: {
+  namespaceLabels?: Record<string, string>;
+  podConfigLabels?: Record<string, string>;
+}): WorkspacekindsActivityRuleMatch[] | undefined => {
+  const { namespaceLabels, podConfigLabels } = labels;
+  const match: WorkspacekindsActivityRuleMatch[] = [];
+  if (namespaceLabels && Object.keys(namespaceLabels).length > 0) {
+    match.push({ matchNamespace: { selector: { matchLabels: namespaceLabels } } });
+  }
+  if (podConfigLabels && Object.keys(podConfigLabels).length > 0) {
+    match.push({ matchPodConfig: { selector: { matchLabels: podConfigLabels } } });
+  }
+  return match.length > 0 ? match : undefined;
+};
+
 export const formatSeconds = (seconds: number): string => {
   if (seconds >= 86400) {
     const days = Math.round((seconds / 86400) * 4) / 4;
@@ -230,21 +277,87 @@ export const formatSeconds = (seconds: number): string => {
     const minutes = Math.round((seconds / 60) * 4) / 4;
     return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
   }
-  return `${seconds}s`;
+  return `${seconds} second${seconds !== 1 ? 's' : ''}`;
+};
+
+export const REDIRECT_MESSAGE_LEVEL_OPTIONS = [
+  { value: 'please choose', label: 'Select one', disabled: true },
+  {
+    value: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+    label: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+    disabled: false,
+  },
+  {
+    value: OptionsRedirectMessageLevel.RedirectMessageLevelWarning,
+    label: OptionsRedirectMessageLevel.RedirectMessageLevelWarning,
+    disabled: false,
+  },
+  {
+    value: OptionsRedirectMessageLevel.RedirectMessageLevelDanger,
+    label: OptionsRedirectMessageLevel.RedirectMessageLevelDanger,
+    disabled: false,
+  },
+];
+
+export const REDIRECT_MESSAGE_ALLOWED_CHARS_REGEX = /^[\p{L}\p{M}\p{N}\-_.,'":?!@#%^*()~+/ ]*$/u;
+export const REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE =
+  'Only letters (any language), numbers, spaces, and the characters - _ . , \' " : ? ! @ # % ^ * ( ) ~ + / are allowed';
+
+export const getRedirectMessageError = (redirect?: OptionsOptionRedirect): string | undefined => {
+  if (!redirect?.to || !redirect.message?.text) {
+    return undefined;
+  }
+  const rawText = redirect.message.text;
+  if (rawText.trim().length === 0) {
+    return undefined;
+  }
+  if (!REDIRECT_MESSAGE_ALLOWED_CHARS_REGEX.test(rawText)) {
+    return REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE;
+  }
+  const runeLength = Array.from(rawText).length;
+  if (runeLength < 2) {
+    return 'Message text must be at least 2 characters.';
+  }
+  if (runeLength > 1024) {
+    return 'Message text cannot exceed 1024 characters.';
+  }
+  return undefined;
+};
+
+export const normalizeRedirect = (
+  redirect?: OptionsOptionRedirect,
+): OptionsOptionRedirect | undefined => {
+  if (!redirect?.to) {
+    return undefined;
+  }
+  const rawText = redirect.message?.text;
+  if (!rawText || rawText.trim().length === 0) {
+    return {
+      to: redirect.to,
+    };
+  }
+  return {
+    to: redirect.to,
+    message: {
+      level: redirect.message?.level || OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+      text: rawText,
+    },
+  };
 };
 
 const convertRedirectToApi = (
   redirect: WorkspaceKindPodConfigValue['redirect'],
 ): V1Beta1OptionRedirect | undefined => {
-  if (!redirect?.to) {
+  const normalized = normalizeRedirect(redirect);
+  if (!normalized) {
     return undefined;
   }
   return {
-    to: redirect.to,
-    message: redirect.message
+    to: normalized.to,
+    message: normalized.message
       ? {
-          level: redirect.message.level as unknown as V1Beta1RedirectMessageLevel,
-          text: redirect.message.text,
+          level: normalized.message.level as unknown as V1Beta1RedirectMessageLevel,
+          text: normalized.message.text,
         }
       : undefined,
   };
@@ -254,7 +367,7 @@ export const convertFormDataToUpdate = (
   formData: WorkspaceKindFormData,
   original: WorkspacekindsWorkspaceKindUpdate,
 ): WorkspacekindsWorkspaceKindUpdate => ({
-  revision: original.revision,
+  ...original,
   activityRules: formData.activityRules?.map((rule) => ({
     config: rule.config,
     effect: rule.effect,
@@ -279,7 +392,7 @@ export const convertFormDataToUpdate = (
       labels: formData.podTemplate.podMetadata.labels,
       annotations: formData.podTemplate.podMetadata.annotations,
     },
-    volumeMounts: original.podTemplate.volumeMounts,
+    volumeMountPaths: original.podTemplate.volumeMountPaths,
     activityProbe: formData.podTemplate.activityProbe,
     options: {
       imageConfig: {

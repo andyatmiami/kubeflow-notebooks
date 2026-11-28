@@ -569,6 +569,7 @@ describe('Workspace Redirects', () => {
         namespace: mockNamespace.name,
         workspaceKind: buildMockWorkspaceKindInfo({ name: 'jupyterlab' }),
         state,
+        paused: state === V1Beta1WorkspaceState.WorkspaceStatePaused,
         podTemplate: buildMockPodTemplate({
           options: buildPodTemplateOptions({
             imageConfig: buildMockImageConfig({
@@ -598,6 +599,12 @@ describe('Workspace Redirects', () => {
         mockModArchResponse([mockWorkspace]),
       ).as('getWorkspaces');
 
+      const currentState = buildMockWorkspaceUpdateFromWorkspace({
+        workspace: mockWorkspace,
+        workspaceUpdate: { displayName: 'Research notebook', revision: 'opaque/revision:17' },
+        podMetadata: { labels: { team: 'research' }, annotations: { owner: 'notebooks' } },
+        volumes: { home: 'home-pvc' },
+      });
       cy.interceptApi(
         'GET /api/:apiVersion/workspaces/:namespace/:workspaceName',
         {
@@ -607,14 +614,16 @@ describe('Workspace Redirects', () => {
             workspaceName: TEST_WORKSPACE_NAME,
           },
         },
-        mockModArchResponse(buildMockWorkspaceUpdateFromWorkspace({ workspace: mockWorkspace })),
+        mockModArchResponse(currentState),
       ).as('getWorkspace');
 
-      return { mockNamespace, mockWorkspace };
+      return { mockNamespace, mockWorkspace, currentState };
     };
 
     it('should update and start workspace with redirect targets', () => {
-      const { mockNamespace } = setupUpdateActionTest(V1Beta1WorkspaceState.WorkspaceStatePaused);
+      const { mockNamespace, currentState } = setupUpdateActionTest(
+        V1Beta1WorkspaceState.WorkspaceStatePaused,
+      );
 
       cy.interceptApi(
         'PUT /api/:apiVersion/workspaces/:namespace/:workspaceName',
@@ -633,21 +642,34 @@ describe('Workspace Redirects', () => {
       navBar.selectNamespace(mockNamespace.name);
       cy.wait('@getWorkspaces');
 
-      workspaces.findAction({ action: 'start', workspaceName: TEST_WORKSPACE_NAME }).click();
+      workspaces.findStartButton(TEST_WORKSPACE_NAME).click();
       startModal.findUpdateAndStartButton().click();
 
       cy.wait('@getWorkspace');
       cy.wait('@updateWorkspace').then((interception) => {
         const { body } = interception.request;
-        expect(body.data.paused).to.equal(false);
-        expect(body.data.podTemplate.options.imageConfig).to.equal(REDIRECT_TARGET_IMAGE_ID);
+        expect(body).to.deep.equal({
+          data: {
+            ...currentState,
+            paused: false,
+            podTemplate: {
+              ...currentState.podTemplate,
+              options: {
+                ...currentState.podTemplate.options,
+                imageConfig: REDIRECT_TARGET_IMAGE_ID,
+              },
+            },
+          },
+        });
       });
 
       startModal.assertModalNotExists();
     });
 
     it('should update and stop workspace with redirect targets', () => {
-      const { mockNamespace } = setupUpdateActionTest(V1Beta1WorkspaceState.WorkspaceStateRunning);
+      const { mockNamespace, currentState } = setupUpdateActionTest(
+        V1Beta1WorkspaceState.WorkspaceStateRunning,
+      );
 
       cy.interceptApi(
         'PUT /api/:apiVersion/workspaces/:namespace/:workspaceName',
@@ -666,14 +688,25 @@ describe('Workspace Redirects', () => {
       navBar.selectNamespace(mockNamespace.name);
       cy.wait('@getWorkspaces');
 
-      workspaces.findAction({ action: 'stop', workspaceName: TEST_WORKSPACE_NAME }).click();
+      workspaces.findStopButton(TEST_WORKSPACE_NAME).click();
       stopModal.findUpdateAndStopButton().click();
 
       cy.wait('@getWorkspace');
       cy.wait('@updateWorkspace').then((interception) => {
         const { body } = interception.request;
-        expect(body.data.paused).to.equal(true);
-        expect(body.data.podTemplate.options.imageConfig).to.equal(REDIRECT_TARGET_IMAGE_ID);
+        expect(body).to.deep.equal({
+          data: {
+            ...currentState,
+            paused: true,
+            podTemplate: {
+              ...currentState.podTemplate,
+              options: {
+                ...currentState.podTemplate.options,
+                imageConfig: REDIRECT_TARGET_IMAGE_ID,
+              },
+            },
+          },
+        });
       });
 
       stopModal.assertModalNotExists();
@@ -704,7 +737,7 @@ describe('Workspace Redirects', () => {
       navBar.selectNamespace(DEFAULT_NAMESPACE);
       cy.wait('@getWorkspaces');
 
-      workspaces.findAction({ action: 'start', workspaceName: TEST_WORKSPACE_NAME }).click();
+      workspaces.findStartButton(TEST_WORKSPACE_NAME).click();
       startModal.findUpdateAndStartButton().click();
 
       cy.wait('@getWorkspace');

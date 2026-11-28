@@ -1,15 +1,32 @@
+import yaml from 'js-yaml';
 import {
+  buildActivityRuleMatch,
   getResources,
   convertFormDataToUpdate,
   formatSeconds,
+  getActivityRuleMatchLabels,
+  getRedirectMessageError,
+  normalizeRedirect,
+  REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE,
 } from '~/app/pages/WorkspaceKinds/Form/helpers';
+import { convertToFormData } from '~/app/pages/WorkspaceKinds/Form/WorkspaceKindForm';
+
+jest.mock('monaco-yaml', () => ({
+  configureMonacoYaml: jest.fn(),
+}));
 import { mockPodConfig } from '~/__mocks__/mockResources';
 import { WorkspaceKindFormData, WorkspaceKindPodConfigValue, ImagePullPolicy } from '~/app/types';
 import {
   WorkspacekindsWorkspaceKindUpdate,
+  V1Beta1FilterRuleScope,
   V1Beta1WorkspaceKindAssetMediaType,
+  V1LabelSelectorOperator,
   V1PullPolicy,
   V1ResourceList,
+  WorkspacekindsActivityRuleMatch,
+  OptionsOptionRedirect,
+  OptionsRedirectMessageLevel,
+  V1Beta1RedirectMessageLevel,
 } from '~/generated/data-contracts';
 
 const buildMockApiUpdate = (
@@ -72,9 +89,14 @@ const buildMockApiUpdate = (
       labels: { app: 'test' },
       annotations: { note: 'test-annotation' },
     },
+    podSpec: {
+      mainContainer: {},
+    },
     ports: [{ id: 'http', defaultDisplayName: 'HTTP', protocol: 'HTTP' as never }],
-    serviceAccount: { name: 'default-editor' },
-    volumeMounts: { home: '/home/jovyan' },
+    serviceAccount: {
+      clusterRoles: [{ name: 'kubeflow-edit' }],
+    },
+    volumeMountPaths: { home: '/home/jovyan' },
   },
   ...overrides,
 });
@@ -120,6 +142,8 @@ const buildMockFormData = (overrides?: Partial<WorkspaceKindFormData>): Workspac
         },
         nodeSelector: { 'kubernetes.io/os': 'linux' },
         restrictions: { deny: false },
+        podMetadata: { labels: {}, annotations: {} },
+        statefulSetMetadata: { labels: {}, annotations: {} },
       },
     ],
   },
@@ -128,10 +152,10 @@ const buildMockFormData = (overrides?: Partial<WorkspaceKindFormData>): Workspac
       labels: { app: 'test' },
       annotations: { note: 'test-annotation' },
     },
-    volumeMounts: { home: '/home/jovyan' },
+    volumeMountPaths: { home: '/home/jovyan' },
     activityProbe: {
       probeIntervalSeconds: 3600,
-      jupyter: { lastActivity: true, portId: 'http' },
+      podExec: { script: '#!/usr/bin/env bash\nexit 0' },
     },
   },
   ...overrides,
@@ -177,6 +201,8 @@ describe('getResources', () => {
       labels: [],
       hidden: false,
       restrictions: { deny: false },
+      podMetadata: { labels: {}, annotations: {} },
+      statefulSetMetadata: { labels: {}, annotations: {} },
     };
 
     const result = getResources(emptyConfig);
@@ -228,7 +254,7 @@ describe('convertFormDataToUpdate', () => {
       labels: { app: 'test' },
       annotations: { note: 'test-annotation' },
     });
-    expect(result.podTemplate.volumeMounts).toEqual({ home: '/home/jovyan' });
+    expect(result.podTemplate.volumeMountPaths).toEqual({ home: '/home/jovyan' });
   });
 
   it('should map image config values correctly', () => {
@@ -261,6 +287,27 @@ describe('convertFormDataToUpdate', () => {
     expect(pod.spec.nodeSelector).toEqual({ 'kubernetes.io/os': 'linux' });
   });
 
+  it('should preserve non-form top-level fields from original via spreading', () => {
+    const original = buildMockApiUpdate();
+
+    (original as unknown as Record<string, unknown>).futureApiField = {
+      enabled: true,
+      nested: {
+        value: 'preserve-me',
+      },
+    };
+
+    const formData = buildMockFormData();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect((result as unknown as Record<string, unknown>).futureApiField).toEqual({
+      enabled: true,
+      nested: {
+        value: 'preserve-me',
+      },
+    });
+  });
+
   it('should preserve non-form fields from original via spreading', () => {
     const original = buildMockApiUpdate();
     // Add a non-form field to a pod config spec
@@ -269,7 +316,13 @@ describe('convertFormDataToUpdate', () => {
     ).affinity = {
       nodeAffinity: {
         requiredDuringSchedulingIgnoredDuringExecution: {
-          nodeSelectorTerms: [{ matchExpressions: [{ key: 'gpu', operator: 'Exists' }] }],
+          nodeSelectorTerms: [
+            {
+              matchExpressions: [
+                { key: 'gpu', operator: V1LabelSelectorOperator.LabelSelectorOpExists },
+              ],
+            },
+          ],
         },
       },
     };
@@ -298,6 +351,7 @@ describe('convertFormDataToUpdate', () => {
     expect((result.podTemplate as unknown as Record<string, unknown>).extraEnv).toEqual([
       { name: 'MY_VAR', value: 'test' },
     ]);
+    expect(result.podTemplate.serviceAccount).toEqual(original.podTemplate.serviceAccount);
   });
 
   it('should preserve culling config from form data', () => {
@@ -308,7 +362,7 @@ describe('convertFormDataToUpdate', () => {
 
     expect(result.podTemplate.activityProbe).toEqual({
       probeIntervalSeconds: 3600,
-      jupyter: { lastActivity: true, portId: 'http' },
+      podExec: { script: '#!/usr/bin/env bash\nexit 0' },
     });
   });
 
@@ -392,24 +446,213 @@ describe('convertFormDataToUpdate', () => {
     });
   });
 
-  it('should preserve the original volumeMounts.home (immutable field)', () => {
+  it('should preserve the original volumeMountPaths.home (immutable field)', () => {
     const formData = buildMockFormData({
       podTemplate: {
         podMetadata: { labels: {}, annotations: {} },
-        volumeMounts: { home: '/home/changed-by-user' },
+        volumeMountPaths: { home: '/home/changed-by-user' },
       },
     });
     const original = buildMockApiUpdate();
     const result = convertFormDataToUpdate(formData, original);
 
-    expect(result.podTemplate.volumeMounts).toEqual({ home: '/home/jovyan' });
+    expect(result.podTemplate.volumeMountPaths).toEqual({ home: '/home/jovyan' });
   });
 
-  it('should format seconds below 60 as raw seconds', () => {
-    expect(formatSeconds(0)).toBe('0s');
-    expect(formatSeconds(1)).toBe('1s');
-    expect(formatSeconds(15)).toBe('15s');
-    expect(formatSeconds(59)).toBe('59s');
+  it('should convert podConfig redirect to API format when present', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: 'Upgraded to pod-2',
+      },
+    };
+    const original = buildMockApiUpdate();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.podTemplate.options.podConfig.values[0].redirect).toEqual({
+      to: 'pod-2',
+      message: {
+        level: 'Info',
+        text: 'Upgraded to pod-2',
+      },
+    });
+  });
+
+  it('should omit podConfig redirect when to is empty or undefined', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: '',
+    };
+    const original = buildMockApiUpdate();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.podTemplate.options.podConfig.values[0].redirect).toBeUndefined();
+  });
+
+  it('should omit redirect message when text is empty or whitespace-only', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: '   ',
+      },
+    };
+    const original = buildMockApiUpdate();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.podTemplate.options.podConfig.values[0].redirect).toEqual({
+      to: 'pod-2',
+    });
+  });
+
+  it('should preserve podConfig redirect with message through Form -> YAML -> Form round trip', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelWarning,
+        text: 'Deprecation notice: use pod-2 instead',
+      },
+    };
+    const original = buildMockApiUpdate();
+
+    // Form -> YAML
+    const updateObj = convertFormDataToUpdate(formData, original);
+    const yamlStr = yaml.dump(updateObj, { noRefs: true });
+
+    // YAML -> Form
+    const parsed = yaml.load(yamlStr) as WorkspacekindsWorkspaceKindUpdate;
+    const roundTrippedFormData = convertToFormData(parsed);
+
+    expect(roundTrippedFormData.podConfig.values![0].redirect).toEqual({
+      to: 'pod-2',
+      message: {
+        level: 'Warning',
+        text: 'Deprecation notice: use pod-2 instead',
+      },
+    });
+  });
+
+  it('should preserve podConfig target-only redirect through Form -> YAML -> Form round trip', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: 'pod-2',
+    };
+    const original = buildMockApiUpdate();
+
+    // Form -> YAML
+    const updateObj = convertFormDataToUpdate(formData, original);
+    const yamlStr = yaml.dump(updateObj, { noRefs: true });
+
+    // YAML -> Form
+    const parsed = yaml.load(yamlStr) as WorkspacekindsWorkspaceKindUpdate;
+    const roundTrippedFormData = convertToFormData(parsed);
+
+    expect(roundTrippedFormData.podConfig.values![0].redirect).toEqual({
+      to: 'pod-2',
+      message: undefined,
+    });
+  });
+
+  it('should preserve podConfig redirect on initial load and reopen workflow', () => {
+    const apiUpdate = buildMockApiUpdate();
+    apiUpdate.podTemplate.options.podConfig.values[0].redirect = {
+      to: 'pod-2',
+      message: {
+        level: V1Beta1RedirectMessageLevel.RedirectMessageLevelInfo,
+        text: 'Redirected to pod-2',
+      },
+    };
+
+    const formData = convertToFormData(apiUpdate);
+
+    expect(formData.podConfig.values![0].redirect).toEqual({
+      to: 'pod-2',
+      message: {
+        level: 'Info',
+        text: 'Redirected to pod-2',
+      },
+    });
+  });
+
+  it('should preserve untouched image redirect message text without trimming', () => {
+    const formData = buildMockFormData();
+    formData.imageConfig.values![0].redirect = {
+      to: 'img-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: ' x',
+      },
+    };
+    const original = buildMockApiUpdate();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.podTemplate.options.imageConfig.values[0].redirect).toEqual({
+      to: 'img-2',
+      message: {
+        level: 'Info',
+        text: ' x',
+      },
+    });
+  });
+
+  it('should preserve untouched image redirect message with leading whitespace through Form -> YAML -> Form round trip', () => {
+    const formData = buildMockFormData();
+    formData.imageConfig.values![0].redirect = {
+      to: 'img-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: ' x',
+      },
+    };
+    const original = buildMockApiUpdate();
+
+    // Form -> YAML
+    const updateObj = convertFormDataToUpdate(formData, original);
+    const yamlStr = yaml.dump(updateObj, { noRefs: true });
+
+    // YAML -> Form
+    const parsed = yaml.load(yamlStr) as WorkspacekindsWorkspaceKindUpdate;
+    const roundTrippedFormData = convertToFormData(parsed);
+
+    expect(roundTrippedFormData.imageConfig.values![0].redirect).toEqual({
+      to: 'img-2',
+      message: {
+        level: 'Info',
+        text: ' x',
+      },
+    });
+  });
+
+  it('should preserve podConfig redirect message text with leading whitespace without trimming', () => {
+    const formData = buildMockFormData();
+    formData.podConfig.values![0].redirect = {
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: ' x',
+      },
+    };
+    const original = buildMockApiUpdate();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.podTemplate.options.podConfig.values[0].redirect).toEqual({
+      to: 'pod-2',
+      message: {
+        level: 'Info',
+        text: ' x',
+      },
+    });
+  });
+
+  it('should format seconds below 60 as whole seconds', () => {
+    expect(formatSeconds(0)).toBe('0 seconds');
+    expect(formatSeconds(1)).toBe('1 second');
+    expect(formatSeconds(15)).toBe('15 seconds');
+    expect(formatSeconds(59)).toBe('59 seconds');
   });
 
   it('should format exact minutes', () => {
@@ -458,11 +701,13 @@ describe('convertFormDataToUpdate', () => {
         {
           id: 'rule-1',
           config: { secondsSinceActive: 3600, minRunningSeconds: 300 },
-          match: {
-            matchNamespace: {
-              selector: { matchLabels: { tier: 'development' } },
+          match: [
+            {
+              matchNamespace: {
+                selector: { matchLabels: { tier: 'development' } },
+              },
             },
-          },
+          ],
           effect: { pauseWorkspace: true },
         },
         {
@@ -478,11 +723,13 @@ describe('convertFormDataToUpdate', () => {
     expect(result.activityRules).toHaveLength(2);
     expect(result.activityRules![0]).toEqual({
       config: { secondsSinceActive: 3600, minRunningSeconds: 300 },
-      match: {
-        matchNamespace: {
-          selector: { matchLabels: { tier: 'development' } },
+      match: [
+        {
+          matchNamespace: {
+            selector: { matchLabels: { tier: 'development' } },
+          },
         },
-      },
+      ],
       effect: { pauseWorkspace: true },
     });
     expect(result.activityRules![1]).toEqual({
@@ -505,5 +752,292 @@ describe('convertFormDataToUpdate', () => {
     const result = convertFormDataToUpdate(formData, original);
 
     expect(result.activityRules).toEqual([]);
+  });
+
+  it('should preserve filterRules from the original update', () => {
+    const original = buildMockApiUpdate({
+      filterRules: [
+        {
+          scope: V1Beta1FilterRuleScope.FilterRuleScopeWorkspaceKind,
+          effect: {
+            ui: {
+              hide: true,
+            },
+          },
+          match: [
+            {
+              matchNamespace: {
+                selector: {
+                  matchLabels: {
+                    team: 'team_1',
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const formData = buildMockFormData();
+    const result = convertFormDataToUpdate(formData, original);
+
+    expect(result.filterRules).toEqual(original.filterRules);
+  });
+});
+
+describe('getActivityRuleMatchLabels', () => {
+  it('should return undefined for an omitted match list', () => {
+    expect(getActivityRuleMatchLabels(undefined, 'matchNamespace')).toBeUndefined();
+  });
+
+  it('should return only the labels of the requested matcher', () => {
+    const match: WorkspacekindsActivityRuleMatch[] = [
+      { matchNamespace: { selector: { matchLabels: { tier: 'development' } } } },
+      { matchPodConfig: { selector: { matchLabels: { cpu: '100m' } } } },
+    ];
+    expect(getActivityRuleMatchLabels(match, 'matchNamespace')).toEqual({ tier: 'development' });
+    expect(getActivityRuleMatchLabels(match, 'matchPodConfig')).toEqual({ cpu: '100m' });
+  });
+
+  it('should merge labels across multiple conditions using the same matcher', () => {
+    const match: WorkspacekindsActivityRuleMatch[] = [
+      { matchNamespace: { selector: { matchLabels: { tier: 'development' } } } },
+      { matchNamespace: { selector: { matchLabels: { team: 'ml' } } } },
+    ];
+    expect(getActivityRuleMatchLabels(match, 'matchNamespace')).toEqual({
+      tier: 'development',
+      team: 'ml',
+    });
+  });
+
+  it('should return undefined when the matcher only uses matchExpressions', () => {
+    const match: WorkspacekindsActivityRuleMatch[] = [
+      {
+        matchPodConfig: {
+          selector: {
+            matchExpressions: [
+              { key: 'cpu', operator: V1LabelSelectorOperator.LabelSelectorOpExists },
+            ],
+          },
+        },
+      },
+    ];
+    expect(getActivityRuleMatchLabels(match, 'matchPodConfig')).toBeUndefined();
+  });
+});
+
+describe('buildActivityRuleMatch', () => {
+  it('should return undefined when no labels are given', () => {
+    expect(buildActivityRuleMatch({})).toBeUndefined();
+    expect(buildActivityRuleMatch({ namespaceLabels: {}, podConfigLabels: {} })).toBeUndefined();
+  });
+
+  it('should build one condition per matcher with labels', () => {
+    expect(
+      buildActivityRuleMatch({
+        namespaceLabels: { tier: 'development' },
+        podConfigLabels: { cpu: '100m' },
+      }),
+    ).toEqual([
+      { matchNamespace: { selector: { matchLabels: { tier: 'development' } } } },
+      { matchPodConfig: { selector: { matchLabels: { cpu: '100m' } } } },
+    ]);
+  });
+
+  it('should omit the condition for a matcher without labels', () => {
+    expect(buildActivityRuleMatch({ podConfigLabels: { cpu: '100m' } })).toEqual([
+      { matchPodConfig: { selector: { matchLabels: { cpu: '100m' } } } },
+    ]);
+  });
+});
+
+describe('getRedirectMessageError', () => {
+  it('returns undefined when redirect is missing or has no target', () => {
+    expect(getRedirectMessageError(undefined)).toBeUndefined();
+    expect(getRedirectMessageError({ to: '' })).toBeUndefined();
+  });
+
+  it('returns undefined when message text is missing or whitespace-only', () => {
+    expect(getRedirectMessageError({ to: 'pod-2' })).toBeUndefined();
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: '' },
+      }),
+    ).toBeUndefined();
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: '    ' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined for a valid message', () => {
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+          text: 'Valid message',
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('counts runes on raw un-trimmed text, allowing " x" as 2 characters', () => {
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: ' x' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('rejects message with less than 2 runes', () => {
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: 'a' },
+      }),
+    ).toBe('Message text must be at least 2 characters.');
+
+    // Astral-plane Unicode character (1 rune, though UTF-16 length is 2)
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: '\u{20000}' },
+      }),
+    ).toBe('Message text must be at least 2 characters.');
+  });
+
+  it('accepts multi-byte Unicode letters when rune count >= 2', () => {
+    // 2 astral-plane Unicode letters (2 runes, though UTF-16 length is 4)
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+          text: '\u{20000}\u{20001}',
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('accepts 600 supplementary-plane Unicode letters (rune count 600, UTF-16 length 1200)', () => {
+    const astral600 = '\u{20000}'.repeat(600);
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: astral600 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('rejects characters not matching the allowlist regex', () => {
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+          text: 'hello \u{1F9AD}',
+        }, // emoji 🦭
+      }),
+    ).toBe(REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE);
+
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+          text: 'price $100',
+        },
+      }),
+    ).toBe(REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE);
+
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+          text: '<script>alert(1)</script>',
+        },
+      }),
+    ).toBe(REDIRECT_MESSAGE_ALLOWED_CHARS_MESSAGE);
+  });
+
+  it('enforces maxLength of 1024 runes', () => {
+    const valid1024 = 'a'.repeat(1024);
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: valid1024 },
+      }),
+    ).toBeUndefined();
+
+    const invalid1025 = 'a'.repeat(1025);
+    expect(
+      getRedirectMessageError({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: invalid1025 },
+      }),
+    ).toBe('Message text cannot exceed 1024 characters.');
+  });
+});
+
+describe('normalizeRedirect', () => {
+  it('returns undefined when redirect is missing or has an empty target', () => {
+    expect(normalizeRedirect(undefined)).toBeUndefined();
+    expect(normalizeRedirect({ to: '' })).toBeUndefined();
+  });
+
+  it('omits message property entirely when message is missing or whitespace-only', () => {
+    expect(normalizeRedirect({ to: 'pod-2' })).toEqual({ to: 'pod-2' });
+    expect(
+      normalizeRedirect({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo, text: '' },
+      }),
+    ).toEqual({ to: 'pod-2' });
+    expect(
+      normalizeRedirect({
+        to: 'pod-2',
+        message: { level: OptionsRedirectMessageLevel.RedirectMessageLevelWarning, text: '   ' },
+      }),
+    ).toEqual({ to: 'pod-2' });
+  });
+
+  it('defaults level to Info when level is omitted', () => {
+    expect(
+      normalizeRedirect({
+        to: 'pod-2',
+        message: { text: 'Valid message' } as unknown as OptionsOptionRedirect['message'],
+      }),
+    ).toEqual({
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelInfo,
+        text: 'Valid message',
+      },
+    });
+  });
+
+  it('preserves existing level and verbatim text without trimming', () => {
+    expect(
+      normalizeRedirect({
+        to: 'pod-2',
+        message: {
+          level: OptionsRedirectMessageLevel.RedirectMessageLevelWarning,
+          text: ' x',
+        },
+      }),
+    ).toEqual({
+      to: 'pod-2',
+      message: {
+        level: OptionsRedirectMessageLevel.RedirectMessageLevelWarning,
+        text: ' x',
+      },
+    });
   });
 });

@@ -8,6 +8,10 @@ import {
   OptionsPodConfigValue,
   PvcsPVCCreate,
   PvcsPVCListItem,
+  ResourcesContainerResourceUsage,
+  ResourcesMetricsFromMetricsServer,
+  ResourcesResourceValues,
+  ResourcesWorkspaceResourceUsage,
   V1Beta1ImageConfigValue,
   V1Beta1OptionRedirect,
   V1Beta1PodConfigValue,
@@ -17,6 +21,8 @@ import {
   V1PersistentVolumeMode,
   V1PullPolicy,
   SecretsSecretListItem,
+  SecretsSecretUpdate,
+  V1SecretType,
   StorageclassesStorageClassListItem,
   OptionsRedirectMessageLevel,
   WorkspacekindsWorkspaceKindListItem,
@@ -448,7 +454,25 @@ export const buildMockWorkspaceKind = (
         myWorkspaceKindAnnotation: 'my-value',
       },
     },
-    volumeMounts: {
+    statefulSetMetadata: {
+      labels: {
+        myWorkspaceKindStatefulSetLabel: 'my-value',
+      },
+      annotations: {
+        myWorkspaceKindStatefulSetAnnotation: 'my-value',
+      },
+    },
+    serviceAccount: {
+      metadata: {
+        labels: {
+          myWorkspaceKindServiceAccountLabel: 'my-value',
+        },
+        annotations: {
+          myWorkspaceKindServiceAccountAnnotation: 'my-value',
+        },
+      },
+    },
+    volumeMountPaths: {
       home: '/home/jovyan',
     },
     options: {
@@ -582,6 +606,8 @@ export const buildMockWorkspaceKind = (
               workspacesCount: 0,
             },
             restrictions: { deny: false },
+            podMetadata: { labels: {}, annotations: {} },
+            statefulSetMetadata: { labels: {}, annotations: {} },
           },
           {
             id: 'small_cpu',
@@ -593,6 +619,8 @@ export const buildMockWorkspaceKind = (
               { key: 'memory', value: '512Mi' },
             ],
             restrictions: { deny: false },
+            podMetadata: { labels: {}, annotations: {} },
+            statefulSetMetadata: { labels: {}, annotations: {} },
           },
           {
             id: 'medium_cpu',
@@ -604,6 +632,8 @@ export const buildMockWorkspaceKind = (
               { key: 'memory', value: '1Gi' },
             ],
             restrictions: { deny: false },
+            podMetadata: { labels: {}, annotations: {} },
+            statefulSetMetadata: { labels: {}, annotations: {} },
           },
           {
             id: 'large_cpu',
@@ -626,6 +656,8 @@ export const buildMockWorkspaceKind = (
               workspacesCount: 5,
             },
             restrictions: { deny: false },
+            podMetadata: { labels: {}, annotations: {} },
+            statefulSetMetadata: { labels: {}, annotations: {} },
           },
           {
             id: 'large_cpu_hidden',
@@ -641,6 +673,8 @@ export const buildMockWorkspaceKind = (
               workspacesCount: 0,
             },
             restrictions: { deny: false },
+            podMetadata: { labels: {}, annotations: {} },
+            statefulSetMetadata: { labels: {}, annotations: {} },
           },
         ],
       },
@@ -722,6 +756,9 @@ export const buildMockWorkspaceKindUpdate = (
       },
     },
     podMetadata: listItem.podTemplate.podMetadata,
+    podSpec: {
+      mainContainer: {},
+    },
     ports: [
       {
         id: 'http',
@@ -729,8 +766,10 @@ export const buildMockWorkspaceKindUpdate = (
         protocol: V1Beta1ImagePortProtocol.ImagePortProtocolHTTP,
       },
     ],
-    serviceAccount: { name: 'default-editor' },
-    volumeMounts: listItem.podTemplate.volumeMounts,
+    serviceAccount: {
+      clusterRoles: [],
+    },
+    volumeMountPaths: listItem.podTemplate.volumeMountPaths,
   },
 });
 
@@ -912,6 +951,16 @@ export const buildMockSecret = (
   ...secret,
 });
 
+export const buildMockSecretResponse = ({
+  type = V1SecretType.SecretTypeOpaque,
+  immutable = false,
+  contents = { username: {}, password: {} },
+}: Partial<SecretsSecretUpdate> = {}): SecretsSecretUpdate => ({
+  type,
+  immutable,
+  contents: Object.fromEntries(Object.keys(contents).map((key) => [key, {}])),
+});
+
 export const buildMockStorageClass = (
   storageClass?: Partial<StorageclassesStorageClassListItem>,
 ): StorageclassesStorageClassListItem => ({
@@ -1020,3 +1069,40 @@ export const buildMockWorkspaceLogs = (lineCount = 5): string => {
     return `${timestamp} [INFO] jupyter server log line ${i + 1}`;
   }).join('\n');
 };
+
+export const buildMockMetricsResourceValues = (
+  overrides?: Partial<ResourcesResourceValues>,
+): ResourcesResourceValues => ({
+  cpu: '50m',
+  memory: '64Mi',
+  ...overrides,
+});
+
+export const buildMockMetricsFromMetricsServer = (
+  overrides?: Partial<ResourcesMetricsFromMetricsServer>,
+): ResourcesMetricsFromMetricsServer => ({
+  timestamp: '2025-07-01T12:00:00Z',
+  usage: buildMockMetricsResourceValues(),
+  ...overrides,
+});
+
+export const buildMockContainerResourceUsage = (
+  overrides?: Partial<ResourcesContainerResourceUsage>,
+): ResourcesContainerResourceUsage => ({
+  resources: {
+    requests: { cpu: '100m', memory: '128Mi' } as unknown as Record<string, never>,
+    limits: { cpu: '500m', memory: '512Mi' } as unknown as Record<string, never>,
+  },
+  metricsFromMetricsServer: buildMockMetricsFromMetricsServer(),
+  ...overrides,
+});
+
+export const buildMockWorkspaceResourceUsage = (
+  overrides?: Partial<ResourcesWorkspaceResourceUsage>,
+): ResourcesWorkspaceResourceUsage => ({
+  containers: {
+    main: buildMockContainerResourceUsage(),
+    container1: buildMockContainerResourceUsage(),
+  },
+  ...overrides,
+});

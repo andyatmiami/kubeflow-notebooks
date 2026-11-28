@@ -1,3 +1,5 @@
+import { assertSecretModalErrorInFooter } from '~/__tests__/cypress/cypress/pages/components/secretModalFooter';
+
 class RedirectConfirmModal {
   find() {
     return cy.findByTestId('redirect-confirm-modal');
@@ -24,7 +26,10 @@ class RedirectConfirmModal {
   }
 
   assertApplyRedirectButtonNotExists() {
-    return this.find().findByTestId('apply-redirect-button').should('not.exist');
+    return this.find()
+      .should('be.visible')
+      .findByTestId('apply-redirect-button')
+      .should('not.exist');
   }
 
   findContinueButton() {
@@ -111,24 +116,96 @@ class WorkspaceForm {
     return this.findPodConfigCard(podConfigId).should('have.class', 'pf-m-selected');
   }
 
-  findWorkspaceNameInput(): Cypress.Chainable<JQuery<HTMLElement>> {
-    return cy.findByTestId('workspace-name');
+  findDisplayNameInput(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId('workspace-display-name');
   }
 
-  typeWorkspaceName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
-    return this.findWorkspaceNameInput().clear().type(name);
+  /**
+   * Focus explicitly before typing: cy.type()'s internal click-to-focus races the
+   * re-render that follows .clear() (validate + setData on change) and can then
+   * fail the command as a "disabled element" even though the input never is.
+   */
+  typeDisplayName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findDisplayNameInput().focus().clear().type(name);
   }
 
-  assertWorkspaceName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
-    return this.findWorkspaceNameInput().should('have.value', name);
+  /**
+   * Leading/trailing whitespace is trimmed on blur. Re-focus before blurring:
+   * the per-keystroke re-render (validate + setData on change) can drop focus
+   * after cy.type() completes on slower runners, and cy.blur() then fails with
+   * "no currently focused element". A user who just typed still has focus, so
+   * focusing first matches real usage and exercises the real onBlur trim.
+   */
+  blurDisplayName(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findDisplayNameInput().focus().blur();
   }
 
-  assertWorkspaceNameInputInvalid(): Cypress.Chainable<JQuery<HTMLElement>> {
-    return this.findWorkspaceNameInput().should('have.attr', 'aria-invalid', 'true');
+  assertDisplayName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findDisplayNameInput().should('have.value', name);
   }
 
-  assertWorkspaceNameInputValid(): Cypress.Chainable<JQuery<HTMLElement>> {
-    return this.findWorkspaceNameInput().should('not.have.attr', 'aria-invalid', 'true');
+  assertDisplayNameInputInvalid(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findDisplayNameInput().should('have.attr', 'aria-invalid', 'true');
+  }
+
+  assertDisplayNameInputValid(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findDisplayNameInput().should('not.have.attr', 'aria-invalid', 'true');
+  }
+
+  /** The read-only "The Resource Name will be X" text, shown when not editing. */
+  findResourceNameText(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId('workspace-resource-name');
+  }
+
+  /** Just the <strong> name value inside the read-only text (absent when the resource name is empty). */
+  findResourceNameValue(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId('workspace-resource-name-value');
+  }
+
+  assertResourceName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameValue().should('have.text', name);
+  }
+
+  /** The whole Resource Name field is hidden entirely while the display name is empty. */
+  assertResourceNameFieldNotVisible(): void {
+    this.findResourceNameText().should('not.exist');
+  }
+
+  /** The editable text input, only present in the DOM while editing. */
+  findResourceNameInput(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId('workspace-resource-name-input');
+  }
+
+  assertResourceNameInputInvalid(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameInput().should('have.attr', 'aria-invalid', 'true');
+  }
+
+  assertResourceNameInputValid(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameInput().should('not.have.attr', 'aria-invalid', 'true');
+  }
+
+  findResourceNameEditButton(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId('workspace-resource-name-edit');
+  }
+
+  clickResourceNameEdit(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameEditButton().click();
+  }
+
+  typeResourceName(name: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameInput().should('not.be.disabled').clear().type(name);
+  }
+
+  findResourceNameCriterion(key: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId(`workspace-resource-name-criterion-${key}`);
+  }
+
+  assertResourceNameCriterionValid(key: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameCriterion(key).should('have.class', 'pf-m-success');
+  }
+
+  assertResourceNameCriterionInvalid(key: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findResourceNameCriterion(key).should('have.class', 'pf-m-error');
   }
 
   findNextButton(): Cypress.Chainable<JQuery<HTMLElement>> {
@@ -199,6 +276,12 @@ class WorkspaceForm {
     cy.contains('No results found').should('be.visible');
   }
 
+  assertEmptyStateVisible(): void {
+    cy.contains(
+      'No Workspace Kinds are available. Contact your administrator for assistance.',
+    ).should('be.visible');
+  }
+
   assertVolumesCount(count: number): Cypress.Chainable<JQuery<HTMLElement>> {
     return cy
       .findAllByTestId('volumes-count')
@@ -216,7 +299,14 @@ class WorkspaceForm {
   }
 
   findSecretsExpandableToggle(): Cypress.Chainable<JQuery<HTMLElement>> {
-    return cy.contains('button', 'Secrets') as unknown as Cypress.Chainable<JQuery<HTMLElement>>;
+    return cy.findByTestId('secrets-expandable-section').find('button[aria-expanded]').first();
+  }
+
+  findDataVolumesExpandableToggle(): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy
+      .findByTestId('workspace-data-volume-expandable-section')
+      .find('button[aria-expanded]')
+      .first();
   }
 
   expandSecretsSection(): Cypress.Chainable<JQuery<HTMLElement>> {
@@ -406,6 +496,10 @@ class SecretsCreateModal {
     return this.findSecretNameInput().clear().type(name);
   }
 
+  appendToSecretName(value: string) {
+    return this.findSecretNameInput().type(value);
+  }
+
   assertSecretNameValue(value: string) {
     return this.findSecretNameInput().should('have.value', value);
   }
@@ -508,6 +602,10 @@ class SecretsCreateModal {
 
   assertErrorAlertNotExists() {
     return this.findErrorAlert().should('not.exist');
+  }
+
+  assertErrorAlertInFooter() {
+    return assertSecretModalErrorInFooter(this.findErrorAlert());
   }
 
   findHelperText() {

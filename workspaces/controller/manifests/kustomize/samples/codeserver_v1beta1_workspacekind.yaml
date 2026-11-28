@@ -40,14 +40,11 @@ spec:
   activityRules:
     - config:
         secondsSinceActive: 7200
-      match: {}
+      match: []
       effect:
         pauseWorkspace: true
 
   podTemplate:
-    podMetadata:
-      labels: {}
-      annotations: {}
     activityProbe:
       minProbeIntervalSeconds: 300
       probeIntervalSeconds: 3600
@@ -58,7 +55,7 @@ spec:
           # A mock probe that always reports activity (replace with real detection logic)
           echo '{"has_activity": true}' > "$OUTPUT_JSON_PATH"
           exit 0
-    volumeMounts:
+    volumeMountPaths:
       home: "/home/jovyan"
     ports:
       - id: "codeserver"
@@ -67,40 +64,42 @@ spec:
         httpProxy:
           removePathPrefix: true
           requestHeaders: {}
-    extraEnv: []
-    extraVolumeMounts:
-      - name: "dshm"
-        mountPath: "/dev/shm"
-    extraVolumes:
-      - name: "dshm"
-        emptyDir:
-          medium: "Memory"
-    securityContext:
-      fsGroup: 100
-      seccompProfile:
-        type: RuntimeDefault
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop:
-          - ALL
-      runAsNonRoot: true
-      seccompProfile:
-        type: RuntimeDefault
+    podSpec:
+      securityContext:
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
+      extraVolumes:
+        - name: "dshm"
+          emptyDir:
+            medium: "Memory"
+      mainContainer:
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        extraEnv: []
+        extraVolumeMounts:
+          - name: "dshm"
+            mountPath: "/dev/shm"
     options:
       imageConfig:
         spawner:
-          default: "codeserver-python:v1.10.0"
+          default: "codeserver-python:v1.11.1"
         values:
-          - id: "codeserver-python:v1.10.0"
+          - id: "codeserver-python:v1.11.1"
             spawner:
-              displayName: "codeserver-python:v1.10.0"
+              displayName: "codeserver-python:v1.11.1"
               description: "code-server, with Conda Python"
               labels:
                 - key: "python_version"
-                  value: "3.11.11"
+                  value: "3.12.13"
             spec:
-              image: "ghcr.io/kubeflow/kubeflow/notebook-servers/codeserver-python:v1.10.0"
+              image: "ghcr.io/kubeflow/kubeflow/notebook-servers/codeserver-python:v1.11.1"
               imagePullPolicy: "IfNotPresent"
               ports:
                 - id: "codeserver"

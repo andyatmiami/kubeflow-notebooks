@@ -19,9 +19,11 @@ import {
 } from '~/shared/mock/mockNotebookServiceData';
 import { buildAxiosError, isInvalidWorkspace, isInvalidYaml } from '~/shared/mock/mockUtils';
 import {
+  buildMockSecretResponse,
   buildMockWorkspaceDetails,
   buildMockWorkspaceKindUpdate,
   buildMockWorkspaceLogs,
+  buildMockWorkspaceResourceUsage,
   buildMockWorkspaceUpdateFromWorkspace,
 } from './mockBuilder';
 
@@ -80,6 +82,9 @@ export const mockNotebookApisImpl = (): NotebookApis => ({
     }),
     getWorkspacePodTemplateLogsBatch: async (_namespace, _workspaceName, query) =>
       buildMockWorkspaceLogs(Math.min(query?.tailLines ?? 20, 50)),
+    getWorkspacePodTemplateResources: async () => ({
+      data: buildMockWorkspaceResourceUsage(),
+    }),
     updateWorkspacePauseState: async (_namespace, _workspaceName, body) => {
       await delay(1500);
       return {
@@ -93,9 +98,33 @@ export const mockNotebookApisImpl = (): NotebookApis => ({
       const found = mockWorkspaceKinds.find((w) => w.name === kind)!;
       return { data: buildMockWorkspaceKindUpdate(found) };
     },
-    updateWorkspaceKind: async () => ({
-      data: buildMockWorkspaceKindUpdate(mockWorkspaceKind1),
-    }),
+    updateWorkspaceKind: async (name, body) => {
+      if (
+        name.includes('-invalid') ||
+        (body.data.spawner.displayName && body.data.spawner.displayName.includes('-invalid'))
+      ) {
+        const apiErrorEnvelope: ApiErrorEnvelope = {
+          error: {
+            code: '422',
+            message: 'request body was invalid',
+            cause: {
+              // eslint-disable-next-line camelcase
+              validation_errors: [
+                {
+                  type: FieldErrorType.ErrorTypeInvalid,
+                  field: 'spec.spawner.displayName',
+                  message: "Invalid value: 'displayName' contains invalid pattern",
+                },
+              ],
+            },
+          },
+        };
+        throw buildAxiosError(apiErrorEnvelope, 422);
+      }
+      return {
+        data: buildMockWorkspaceKindUpdate(mockWorkspaceKind1),
+      };
+    },
     deleteWorkspaceKind: async () => {
       await delay(1500);
     },
@@ -143,7 +172,7 @@ export const mockNotebookApisImpl = (): NotebookApis => ({
       if (isInvalidYaml(body)) {
         const apiErrorEnvelope: ApiErrorEnvelope = {
           error: {
-            code: 'invalid_yaml',
+            code: '422',
             message: 'Invalid YAML provided',
             cause: {
               // eslint-disable-next-line camelcase
@@ -168,7 +197,7 @@ export const mockNotebookApisImpl = (): NotebookApis => ({
           },
         };
 
-        throw buildAxiosError(apiErrorEnvelope);
+        throw buildAxiosError(apiErrorEnvelope, 422);
       }
       const update = buildMockWorkspaceKindUpdate(mockWorkspaceKind1);
       return {
@@ -187,12 +216,11 @@ export const mockNotebookApisImpl = (): NotebookApis => ({
     createSecret: async () => ({
       data: mockSecretCreate,
     }),
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    getSecret: async (_, name) => ({
-      data: name === 'secret-3' ? mockSecretCreate3 : mockSecretCreate,
+    getSecret: async (_namespace, name) => ({
+      data: buildMockSecretResponse(name === 'secret-3' ? mockSecretCreate3 : mockSecretCreate),
     }),
-    updateSecret: async () => ({
-      data: mockSecretCreate,
+    updateSecret: async (_namespace, _name, { data }) => ({
+      data: buildMockSecretResponse(data),
     }),
     deleteSecret: async (namespace, name) => {
       // For mock API errors, a secret is considered invalid if the name contains a specific pattern.

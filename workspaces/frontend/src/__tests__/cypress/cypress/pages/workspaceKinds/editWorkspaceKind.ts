@@ -136,6 +136,9 @@ class EditWorkspaceKind {
   }
 
   assertLogoUrlInputVisible() {
+    // Plain `.should('be.visible')` does not auto-scroll like action commands do,
+    // and this field can render below the fold once Properties is expanded.
+    this.findLogoUrlInput().scrollIntoView();
     this.findLogoUrlInput().should('be.visible');
   }
 
@@ -435,6 +438,75 @@ class EditWorkspaceKind {
     return cy.findByTestId('pod-config-modal');
   }
 
+  expandResources() {
+    cy.findByTestId('pod-config-resources')
+      .findByRole('button', { name: /Resources/ })
+      .click();
+  }
+
+  toggleResource(field: 'cpu-request' | 'cpu-limit' | 'memory-request' | 'memory-limit') {
+    cy.findByTestId(`${field}-checkbox`).click();
+  }
+
+  assertResourceToggle(field: string, checked: boolean) {
+    cy.findByTestId(`${field}-checkbox`).should(checked ? 'be.checked' : 'not.be.checked');
+  }
+
+  setResourceValue(label: string, value: string) {
+    cy.findByTestId(`${label}-input`).findByLabelText(label).clear();
+    if (value) {
+      cy.findByTestId(`${label}-input`).findByLabelText(label).type(value);
+    }
+  }
+
+  assertResourceValue(label: string, value: string) {
+    cy.findByTestId(`${label}-input`).findByLabelText(label).should('have.value', value);
+  }
+
+  addCustomResource() {
+    cy.findByTestId('add-custom-resource').click();
+  }
+
+  setCustomResourceName(name: string) {
+    cy.findByTestId('custom-resource-type').clear();
+    if (name) {
+      cy.findByTestId('custom-resource-type').type(name);
+    }
+  }
+
+  addGpuResource() {
+    this.addCustomResource();
+    this.setCustomResourceName('nvidia.com/gpu');
+  }
+
+  assertCustomRequestVisible() {
+    cy.findByTestId('Custom resource request-input').scrollIntoView();
+    cy.findByTestId('Custom resource request-input').should('be.visible');
+  }
+
+  assertCustomLimitOnly() {
+    cy.findByTestId('Custom resource request-input').should('not.exist');
+    cy.findByTestId('custom-resource-limit-checkbox').should('not.exist');
+    cy.findByTestId('custom-resource-mode').should('not.exist');
+    this.findPodConfigModal().should(
+      'contain.text',
+      'Extended resources and huge pages use the limit as the request.',
+    );
+  }
+
+  assertGpuLimitOnly() {
+    this.assertCustomLimitOnly();
+    this.findPodConfigModal().should('not.contain.text', 'request must equal');
+  }
+
+  assertResourceError(message: string) {
+    this.findPodConfigModal().should('contain.text', message);
+  }
+
+  assertPodConfigSaveEnabled(enabled: boolean) {
+    this.findPodConfigModalSubmitButton().should(enabled ? 'not.be.disabled' : 'be.disabled');
+  }
+
   findPodConfigModalTitle() {
     return cy.findByTestId('pod-config-modal-title');
   }
@@ -575,6 +647,61 @@ class EditWorkspaceKind {
     }
   }
 
+  // Pod Config Redirect
+  findPodConfigRedirectSection() {
+    return this.findPodConfigModal().findByTestId('workspace-kind-pod-config-redirect-section');
+  }
+
+  expandPodConfigRedirectSection() {
+    this.findPodConfigRedirectSection()
+      .findByRole('button', { name: /Redirect/i })
+      .click();
+  }
+
+  findPodConfigRedirectToSelect() {
+    return this.findPodConfigModal().findByTestId('workspace-kind-pod-config-redirect-to-select');
+  }
+
+  selectPodConfigRedirectTo(targetId: string) {
+    this.findPodConfigRedirectToSelect().select(targetId);
+  }
+
+  findPodConfigRedirectMsgLvlSelect() {
+    return this.findPodConfigModal().findByTestId(
+      'workspace-kind-pod-config-redirect-msg-lvl-select',
+    );
+  }
+
+  selectPodConfigRedirectMsgLvl(level: string) {
+    this.findPodConfigRedirectMsgLvlSelect().select(level);
+  }
+
+  findPodConfigRedirectMessageInput() {
+    return this.findPodConfigModal().findByTestId(
+      'workspace-kind-pod-config-redirect-message-text-input',
+    );
+  }
+
+  typePodConfigRedirectMessage(text: string) {
+    this.findPodConfigRedirectMessageInput().clear().type(text);
+  }
+
+  assertPodConfigRedirectMessage(text: string) {
+    this.findPodConfigRedirectMessageInput().should('have.value', text);
+  }
+
+  findPodConfigRedirectMessageError() {
+    return this.findPodConfigModal().findByTestId('redirect-message-error');
+  }
+
+  assertPodConfigRedirectMessageErrorVisible(visible: boolean) {
+    if (visible) {
+      this.findPodConfigRedirectMessageError().should('be.visible');
+    } else {
+      this.findPodConfigRedirectMessageError().should('not.exist');
+    }
+  }
+
   // Node Selector in Pod Config Modal
   findNodeSelectorSection() {
     return this.findPodConfigModal().findByTestId('node-selector-section');
@@ -667,10 +794,6 @@ class EditWorkspaceKind {
 
   assertPodMetadataSectionVisible() {
     cy.contains('Pod Metadata').should('be.visible');
-  }
-
-  assertAdditionalVolumesSectionVisible() {
-    cy.contains('Additional Volumes').should('be.visible');
   }
 
   // Pod Metadata - Labels
@@ -793,171 +916,6 @@ class EditWorkspaceKind {
 
   assertAnnotationValue(index: number, value: string) {
     this.findAnnotationRow(index).find('input').eq(1).should('have.value', value);
-  }
-
-  // Additional Volumes
-  findCreateVolumeButton() {
-    return cy.findByTestId('attach-new-volume-button');
-  }
-
-  clickCreateVolume() {
-    this.findCreateVolumeButton().click();
-  }
-
-  findVolumesTable() {
-    return cy.findByTestId('volumes-table');
-  }
-
-  findVolumeRow(index: number) {
-    return this.findVolumesTable().find('tbody').eq(index).find('tr').first();
-  }
-
-  findVolumeRowKebab(index: number) {
-    return this.findVolumeRow(index).find('button[aria-label="plain kebab"]');
-  }
-
-  clickVolumeRowKebab(index: number) {
-    this.findVolumeRowKebab(index).click();
-  }
-
-  clickEditVolume(pvcName: string) {
-    cy.findByTestId(`edit-volume-${pvcName}`).click();
-  }
-
-  findDetachVolumeMenuItem() {
-    return cy.contains('[role="menuitem"]', 'Detach');
-  }
-
-  clickDetachVolume() {
-    this.findDetachVolumeMenuItem().click();
-  }
-
-  assertVolumeCount(count: number) {
-    if (count === 0) {
-      cy.findByTestId('volumes-table').should('not.exist');
-    } else {
-      this.findVolumesTable().find('tbody').should('have.length', count);
-    }
-  }
-
-  assertVolumeInTable(pvcName: string) {
-    this.findVolumesTable().contains(pvcName).should('be.visible');
-  }
-
-  assertVolumeNotInTable(pvcName: string) {
-    cy.get('body').then((body) => {
-      if (body.find('[data-testid="volumes-table"]').length > 0) {
-        this.findVolumesTable().should('not.contain.text', pvcName);
-      }
-    });
-  }
-
-  // Volume Modal
-  findVolumeModal() {
-    return cy.findByTestId('create-volume-modal');
-  }
-
-  findVolumeModalTitle() {
-    return this.findVolumeModal().find('h1');
-  }
-
-  findPvcNameInput() {
-    return cy.findByTestId('pvc-name-input');
-  }
-
-  findMountPathInput() {
-    return cy.findByTestId('mount-path-input');
-  }
-
-  clickEditMountPath() {
-    cy.findByTestId('mount-path-edit').click();
-  }
-
-  findReadOnlySwitch() {
-    return cy.findByTestId('read-only-switch');
-  }
-
-  typePvcName(name: string) {
-    this.findPvcNameInput().clear().type(name);
-  }
-
-  typeMountPath(path: string) {
-    this.clickEditMountPath();
-    this.findMountPathInput().clear().type(path);
-    cy.findByTestId('mount-path-save').click();
-  }
-
-  toggleReadOnly() {
-    this.findReadOnlySwitch().click({ force: true });
-  }
-
-  findVolumeModalSubmitButton() {
-    return cy.findByTestId('create-volume-submit-button');
-  }
-
-  findVolumeModalCancelButton() {
-    return cy.findByTestId('create-volume-cancel-button');
-  }
-
-  submitVolumeModal() {
-    this.findVolumeModalSubmitButton().click();
-  }
-
-  cancelVolumeModal() {
-    this.findVolumeModalCancelButton().click();
-  }
-
-  assertVolumeModalVisible(visible: boolean) {
-    if (visible) {
-      this.findVolumeModal().should('be.visible');
-    } else {
-      this.findVolumeModal().should('not.exist');
-    }
-  }
-
-  assertVolumeModalTitle(title: string) {
-    this.findVolumeModalTitle().should('have.text', title);
-  }
-
-  assertPvcName(name: string) {
-    this.findPvcNameInput().should('have.value', name);
-  }
-
-  assertMountPath(path: string) {
-    this.findMountPathInput().should('have.value', path);
-  }
-
-  assertReadOnlyChecked(checked: boolean) {
-    this.findReadOnlySwitch().should(checked ? 'be.checked' : 'not.be.checked');
-  }
-
-  // Detach Volume Modal
-  findDetachVolumeModal() {
-    return cy.findByTestId('detach-volume-modal');
-  }
-
-  findDetachVolumeModalConfirmButton() {
-    return this.findDetachVolumeModal().findByTestId('confirm-button');
-  }
-
-  findDetachVolumeModalCancelButton() {
-    return this.findDetachVolumeModal().findByTestId('cancel-button');
-  }
-
-  confirmDetachVolume() {
-    this.findDetachVolumeModalConfirmButton().click();
-  }
-
-  cancelDetachVolume() {
-    this.findDetachVolumeModalCancelButton().click();
-  }
-
-  assertDetachVolumeModalVisible(visible: boolean) {
-    if (visible) {
-      this.findDetachVolumeModal().should('be.visible');
-    } else {
-      this.findDetachVolumeModal().should('not.exist');
-    }
   }
 
   // Pod Config Row Expansion
@@ -1094,6 +1052,83 @@ class EditWorkspaceKind {
     cy.findByTestId(`toleration-seconds-cell-${index}`).should('have.text', value);
   }
 
+  // Activity Probe
+  toggleActivityProbe() {
+    cy.findByTestId('workspace-kind-pod-template-activity-probe-switch').click({ force: true });
+  }
+
+  assertActivityProbeEnabled(enabled: boolean) {
+    cy.findByTestId('workspace-kind-pod-template-activity-probe-switch').should(
+      enabled ? 'be.checked' : 'not.be.checked',
+    );
+  }
+
+  findProbeTimingInput(label: string) {
+    return cy.findByTestId('workspace-kind-activity-probe-timing').findByLabelText(label);
+  }
+
+  setProbeTiming({ label, value }: { label: string; value: number }) {
+    this.findProbeTimingInput(label).clear().type(String(value));
+  }
+
+  assertProbeTiming({ label, value }: { label: string; value: number }) {
+    this.findProbeTimingInput(label).should('have.value', String(value));
+  }
+
+  findProbeScriptInput() {
+    return cy.findByTestId('workspace-kind-activity-probe-script-editor').findByRole('textbox');
+  }
+
+  setProbeScript(script: string) {
+    this.findProbeScriptInput().type(
+      Cypress.platform === 'darwin' ? '{meta+a}{backspace}' : '{ctrl+a}{backspace}',
+      { force: true },
+    );
+    if (script) {
+      this.findProbeScriptInput().type(script, { parseSpecialCharSequences: false, force: true });
+    }
+  }
+
+  assertProbeScriptContains(text: string) {
+    cy.findByTestId('workspace-kind-activity-probe-script-editor').should(($editor) => {
+      expect($editor.text().replace(/\u00a0/g, ' ')).to.contain(text);
+    });
+  }
+
+  assertProbeDependencyError(visible: boolean) {
+    cy.findByTestId('activity-probe-dependency-error').should(visible ? 'be.visible' : 'not.exist');
+  }
+
+  assertProbeSettingsGrouped() {
+    cy.findByTestId('workspace-kind-activity-probe-settings').within(() => {
+      cy.findByTestId('workspace-kind-activity-probe-timing').scrollIntoView();
+      cy.findByTestId('workspace-kind-activity-probe-timing').should('be.visible');
+      cy.findByTestId('workspace-kind-activity-probe-script-editor').scrollIntoView();
+      cy.findByTestId('workspace-kind-activity-probe-script-editor').should('be.visible');
+      cy.findByText('Timing', { exact: true }).should('not.exist');
+      cy.findByText('Script', { exact: true }).should('not.exist');
+    });
+  }
+
+  assertProbeTimingLayout(stacked: boolean) {
+    this.findProbeTimingInput('probe interval input').then(($interval) => {
+      const first = $interval[0].getBoundingClientRect();
+      this.findProbeTimingInput('minimum probe interval input').then(($minimum) => {
+        const second = $minimum[0].getBoundingClientRect();
+        this.findProbeTimingInput('probe script timeout input').should(($timeout) => {
+          const third = $timeout[0].getBoundingClientRect();
+          if (stacked) {
+            expect(second.top).to.be.greaterThan(first.bottom);
+            expect(third.top).to.be.greaterThan(second.bottom);
+          } else {
+            expect(Math.abs(first.top - second.top)).to.be.lessThan(2);
+            expect(Math.abs(first.top - third.top)).to.be.lessThan(2);
+          }
+        });
+      });
+    });
+  }
+
   // Activity Rules
   findAddActivityRuleButton() {
     return cy.findByTestId('add-activity-rule-button');
@@ -1163,6 +1198,14 @@ class EditWorkspaceKind {
     cy.findByTestId(`activity-rule-effect-cell-${index}`).should('have.text', value);
   }
 
+  assertActivityRuleNamespaceMatchCell(index: number, value: string) {
+    cy.findByTestId(`activity-rule-ns-match-cell-${index}`).should('have.text', value);
+  }
+
+  assertActivityRulePodConfigMatchCell(index: number, value: string) {
+    cy.findByTestId(`activity-rule-pc-match-cell-${index}`).should('have.text', value);
+  }
+
   clickEditActivityRule(index: number) {
     cy.findByTestId(`activity-rule-edit-${index}`).click();
   }
@@ -1205,7 +1248,12 @@ class EditWorkspaceKind {
       .findByTestId('toast-notification-danger')
       .should('exist');
   }
-
+  findErrorToast() {
+    return cy.findByTestId('toast-notification-group').findByTestId('toast-notification-danger');
+  }
+  assertErrorToastContainsListItem(message: string) {
+    this.findErrorToast().find('li').should('contain.text', message);
+  }
   // View mode tabs (Form / YAML)
   findFormTab() {
     return cy.findByTestId('form-tab');
@@ -1247,6 +1295,12 @@ class EditWorkspaceKind {
 
   assertYamlEditorNotVisible() {
     this.findYamlEditor().should('not.be.visible');
+  }
+
+  // The Monaco editor is only created once the YAML tab is opened, so it is not part of the DOM
+  // at all while the form is being edited.
+  assertYamlEditorNotCreated() {
+    this.findYamlEditor().should('not.exist');
   }
 
   findYamlParseError() {

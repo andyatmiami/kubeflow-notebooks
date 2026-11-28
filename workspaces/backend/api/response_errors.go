@@ -17,6 +17,8 @@ limitations under the License.
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,6 +37,7 @@ const (
 	errMsgInternalValidation   = "validation error (see .cause.validation_errors[] for details)"
 	errMsgKubernetesValidation = "kubernetes validation error (see .cause.validation_errors[] for details) (note: .cause.validation_errors[].field values correspond to the internal k8s object, NOT the request body)"
 	errMsgKubernetesConflict   = "kubernetes conflict error (see .cause.conflict_cause[] for details)"
+	errMsgRequestTimeout       = "the server timed out while processing your request"
 )
 
 // ErrorEnvelope is the body of all error responses.
@@ -122,7 +125,15 @@ func (a *App) errorResponse(w http.ResponseWriter, r *http.Request, httpError *H
 }
 
 // HTTP: 500
+// Delegates to gatewayTimeoutResponse if the request deadline has been exceeded.
+// NOTE: this checks the request context rather than err, because not all errors
+// caused by an exceeded deadline wrap context.DeadlineExceeded.
 func (a *App) serverErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		a.gatewayTimeoutResponse(w, r, err)
+		return
+	}
+
 	a.LogError(r, err)
 
 	httpError := &HTTPError{
@@ -130,6 +141,20 @@ func (a *App) serverErrorResponse(w http.ResponseWriter, r *http.Request, err er
 		ErrorResponse: ErrorResponse{
 			Code:    strconv.Itoa(http.StatusInternalServerError),
 			Message: "the server encountered a problem and could not process your request",
+		},
+	}
+	a.errorResponse(w, r, httpError)
+}
+
+// HTTP: 504
+func (a *App) gatewayTimeoutResponse(w http.ResponseWriter, r *http.Request, err error) {
+	a.LogError(r, err)
+
+	httpError := &HTTPError{
+		StatusCode: http.StatusGatewayTimeout,
+		ErrorResponse: ErrorResponse{
+			Code:    strconv.Itoa(http.StatusGatewayTimeout),
+			Message: errMsgRequestTimeout,
 		},
 	}
 	a.errorResponse(w, r, httpError)
@@ -159,18 +184,34 @@ func (a *App) unauthorizedResponse(w http.ResponseWriter, r *http.Request) {
 	a.errorResponse(w, r, httpError)
 }
 
-// HTTP: 403
-func (a *App) forbiddenResponse(w http.ResponseWriter, r *http.Request, msg string) {
-	a.LogWarn(r, msg)
-
-	httpError := &HTTPError{
+// sendForbidden is the shared 403 writer. logMsg goes to the log; clientMsg
+// is what the API returns to the caller. Prefer the named wrappers below.
+func (a *App) sendForbidden(w http.ResponseWriter, r *http.Request, logMsg, clientMsg string) {
+	a.LogWarn(r, logMsg)
+	a.errorResponse(w, r, &HTTPError{
 		StatusCode: http.StatusForbidden,
 		ErrorResponse: ErrorResponse{
 			Code:    strconv.Itoa(http.StatusForbidden),
-			Message: errMsgForbidden,
+			Message: clientMsg,
 		},
-	}
-	a.errorResponse(w, r, httpError)
+	})
+}
+
+// forbiddenResponse writes a 403 whose client-facing message is intentionally
+// generic (defense in depth: do not leak the reason for the denial). Use this
+// for auth failures and any other 403 where the caller must not learn "why".
+func (a *App) forbiddenResponse(w http.ResponseWriter, r *http.Request, msg string) {
+	a.sendForbidden(w, r, msg, errMsgForbidden)
+}
+
+// policyDeniedResponse writes a 403 whose client-facing message is the supplied
+// policy-authored reason. Use ONLY when the reason originated from cluster
+// configuration (e.g., a WorkspaceKind filterRule denyMessage.text) and is
+// intended to be surfaced to the end user as-is. For all other 403s -
+// including authorization failures and handler-composed reasons - use
+// forbiddenResponse.
+func (a *App) policyDeniedResponse(w http.ResponseWriter, r *http.Request, reason string) {
+	a.sendForbidden(w, r, reason, reason)
 }
 
 // HTTP: 404

@@ -29,7 +29,6 @@ import {
   getMountPathValidationError,
   normalizeMountPath,
 } from '~/app/pages/Workspaces/Form/helpers';
-import { useNamespaceSelectorWrapper } from '~/app/hooks/useNamespaceSelectorWrapper';
 import { SecretsSecretListItem } from '~/generated/data-contracts';
 import { useNotebookAPI } from '~/app/hooks/useNotebookAPI';
 import { WorkspacesPodSecretMountValue } from '~/app/types';
@@ -43,6 +42,7 @@ import { SecretsAttachModal } from './secrets/SecretsAttachModal';
 interface WorkspaceFormPropertiesSecretsProps {
   secrets: WorkspacesPodSecretMountValue[];
   setSecrets: (secrets: WorkspacesPodSecretMountValue[]) => void;
+  namespace: string;
 }
 
 const NUM_TABLE_COLUMNS = 5; // expand toggle + Secret Name + Mount Path + Default Mode + Actions
@@ -50,6 +50,7 @@ const NUM_TABLE_COLUMNS = 5; // expand toggle + Secret Name + Mount Path + Defau
 export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSecretsProps> = ({
   secrets,
   setSecrets,
+  namespace,
 }) => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
@@ -57,15 +58,14 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState<number | null>(null);
-  const { secrets: availableSecrets, refreshSecrets } = useSecrets();
+  const { secrets: availableSecrets, refreshSecrets } = useSecrets(namespace);
   const [secretToEdit, setSecretToEdit] = useState<SecretsSecretListItem | undefined>(undefined);
   const [expandedSecrets, setExpandedSecrets] = useState<Set<string>>(new Set());
   const [editingMountPath, setEditingMountPath] = useState<number | null>(null);
   const [editMountPathValue, setEditMountPathValue] = useState('');
 
   const { api } = useNotebookAPI();
-  const { selectedNamespace } = useNamespaceSelectorWrapper();
-  const { getSecretKeysState, fetchSecretKeys } = useSecretKeys();
+  const { getSecretKeysState, fetchSecretKeys } = useSecretKeys(namespace);
 
   const openDeleteModal = useCallback((i: number) => {
     setIsDeleteModalOpen(true);
@@ -113,11 +113,11 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
     }
     const secretToDelete = secrets[deleteIndex];
     if (!secretToDelete.isAttached) {
-      await api.secrets.deleteSecret(selectedNamespace, secretToDelete.secretName);
+      await api.secrets.deleteSecret(namespace, secretToDelete.secretName);
     }
     setSecrets(secrets.filter((_, i) => i !== deleteIndex));
     setDeleteIndex(null);
-  }, [deleteIndex, secrets, api.secrets, selectedNamespace, setSecrets]);
+  }, [deleteIndex, secrets, api.secrets, namespace, setSecrets]);
 
   const handleSecretCreated = useCallback(
     (secretName: string) => {
@@ -144,21 +144,12 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
     (secretName: string) => {
       const secret = availableSecrets.find((s) => s.name === secretName);
 
-      if (secret && !secret.canUpdate) {
+      if (!secret?.canUpdate) {
         return;
       }
 
-      const secretData = secret ?? {
-        name: secretName,
-        type: 'Opaque',
-        immutable: false,
-        canMount: true,
-        canUpdate: true,
-        audit: { createdAt: '', createdBy: '', updatedAt: '', updatedBy: '', deletedAt: '' },
-      };
-
       setIsEditModalOpen(true);
-      setSecretToEdit(secretData);
+      setSecretToEdit(secret);
     },
     [availableSecrets],
   );
@@ -312,7 +303,7 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
             </Thead>
             {secrets.map((secret, index) => {
               const secretDetails = availableSecrets.find((s) => s.name === secret.secretName);
-              const canUpdate = secretDetails?.canUpdate ?? true;
+              const canUpdate = secretDetails?.canUpdate ?? false;
               const isExpanded = expandedSecrets.has(secret.secretName);
 
               return (
@@ -409,6 +400,7 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
       <SecretsAttachModal
         isOpen={isAttachModalOpen}
         setIsOpen={setIsAttachModalOpen}
+        namespace={namespace}
         onAttach={handleAttachSecrets}
         mountedKeys={mountedKeys}
         existingMountPaths={new Set(secrets.map((s) => s.mountPath))}
@@ -417,6 +409,7 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
       <SecretsCreateModal
         isOpen={isCreateModalOpen}
         setIsOpen={setIsCreateModalOpen}
+        namespace={namespace}
         onSecretCreated={handleSecretCreated}
         existingSecretNames={secrets.map((s) => s.secretName)}
       />
@@ -424,6 +417,7 @@ export const WorkspaceFormPropertiesSecrets: React.FC<WorkspaceFormPropertiesSec
       <SecretsCreateModal
         isOpen={isEditModalOpen}
         setIsOpen={handleEditModalClose}
+        namespace={namespace}
         secretToEdit={secretToEdit}
         onSecretUpdated={handleSecretUpdated}
         existingSecretNames={secrets.map((s) => s.secretName)}

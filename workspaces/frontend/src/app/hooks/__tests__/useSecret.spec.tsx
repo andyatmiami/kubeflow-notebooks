@@ -1,28 +1,18 @@
 import { renderHook } from '~/__tests__/unit/testUtils/hooks';
-import { useNamespaceSelectorWrapper } from '~/app/hooks/useNamespaceSelectorWrapper';
 import { useNotebookAPI } from '~/app/hooks/useNotebookAPI';
 import useSecret from '~/app/hooks/useSecret';
 import { NotebookApis } from '~/shared/api/notebookApi';
+import { buildMockSecretResponse } from '~/shared/mock/mockBuilder';
 
 jest.mock('~/app/hooks/useNotebookAPI', () => ({
   useNotebookAPI: jest.fn(),
 }));
-jest.mock('~/app/hooks/useNamespaceSelectorWrapper', () => ({
-  useNamespaceSelectorWrapper: jest.fn(),
-}));
 
 const mockUseNotebookAPI = useNotebookAPI as jest.MockedFunction<typeof useNotebookAPI>;
-const mockUseNamespaceSelectorWrapper = useNamespaceSelectorWrapper as jest.MockedFunction<
-  typeof useNamespaceSelectorWrapper
->;
 
 describe('useSecret', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseNamespaceSelectorWrapper.mockReturnValue({
-      selectedNamespace: 'test-namespace',
-      namespacesLoaded: true,
-    } as ReturnType<typeof useNamespaceSelectorWrapper>);
   });
 
   it('returns initial state when API is not available', () => {
@@ -32,7 +22,9 @@ describe('useSecret', () => {
       refreshAllAPI: jest.fn(),
     });
 
-    const { result } = renderHook(() => useSecret({ isOpen: true, secretName: 'my-secret' }));
+    const { result } = renderHook(() =>
+      useSecret({ isOpen: true, secretName: 'my-secret', namespace: 'test-namespace' }),
+    );
 
     const [details, loaded] = result.current;
     expect(details).toEqual({ keyValuePairs: [], immutable: false, type: 'Opaque' });
@@ -46,7 +38,9 @@ describe('useSecret', () => {
       refreshAllAPI: jest.fn(),
     });
 
-    const { result } = renderHook(() => useSecret({ isOpen: false, secretName: 'my-secret' }));
+    const { result } = renderHook(() =>
+      useSecret({ isOpen: false, secretName: 'my-secret', namespace: 'test-namespace' }),
+    );
 
     const [details, loaded] = result.current;
     expect(details).toEqual({ keyValuePairs: [], immutable: false, type: 'Opaque' });
@@ -60,21 +54,23 @@ describe('useSecret', () => {
       refreshAllAPI: jest.fn(),
     });
 
-    const { result } = renderHook(() => useSecret({ isOpen: true, secretName: undefined }));
+    const { result } = renderHook(() =>
+      useSecret({ isOpen: true, secretName: undefined, namespace: 'test-namespace' }),
+    );
 
     const [details, loaded] = result.current;
     expect(details).toEqual({ keyValuePairs: [], immutable: false, type: 'Opaque' });
     expect(loaded).toBe(false);
   });
 
-  it('fetches and decodes secret contents when API is available', async () => {
+  it('fetches undisclosed keys without decoding or exposing response values', async () => {
     const getSecret = jest.fn().mockResolvedValue({
       data: {
         type: 'Opaque',
         immutable: false,
         contents: {
-          KEY1: { base64: Buffer.from('value1').toString('base64') },
-          KEY2: { base64: Buffer.from('value2').toString('base64') },
+          KEY1: {},
+          KEY2: { base64: '/wAB' },
         },
       },
     });
@@ -85,15 +81,15 @@ describe('useSecret', () => {
     });
 
     const { result, waitForNextUpdate } = renderHook(() =>
-      useSecret({ isOpen: true, secretName: 'my-secret' }),
+      useSecret({ isOpen: true, secretName: 'my-secret', namespace: 'test-namespace' }),
     );
     await waitForNextUpdate();
 
     const [details, loaded, error] = result.current;
     expect(getSecret).toHaveBeenCalledWith('test-namespace', 'my-secret');
     expect(details.keyValuePairs).toEqual([
-      { key: 'KEY1', value: 'value1' },
-      { key: 'KEY2', value: 'value2' },
+      { key: 'KEY1', kind: 'unchanged' },
+      { key: 'KEY2', kind: 'unchanged' },
     ]);
     expect(details.immutable).toBe(false);
     expect(details.type).toBe('Opaque');
@@ -107,7 +103,7 @@ describe('useSecret', () => {
         type: 'kubernetes.io/tls',
         immutable: true,
         contents: {
-          'tls.crt': { base64: Buffer.from('cert').toString('base64') },
+          'tls.crt': {},
         },
       },
     });
@@ -118,14 +114,14 @@ describe('useSecret', () => {
     });
 
     const { result, waitForNextUpdate } = renderHook(() =>
-      useSecret({ isOpen: true, secretName: 'tls-secret' }),
+      useSecret({ isOpen: true, secretName: 'tls-secret', namespace: 'test-namespace' }),
     );
     await waitForNextUpdate();
 
     const [details, loaded] = result.current;
     expect(details.immutable).toBe(true);
     expect(details.type).toBe('kubernetes.io/tls');
-    expect(details.keyValuePairs).toEqual([{ key: 'tls.crt', value: 'cert' }]);
+    expect(details.keyValuePairs).toEqual([{ key: 'tls.crt', kind: 'unchanged' }]);
     expect(loaded).toBe(true);
   });
 
@@ -140,7 +136,7 @@ describe('useSecret', () => {
     });
 
     const { result, waitForNextUpdate } = renderHook(() =>
-      useSecret({ isOpen: true, secretName: 'empty-secret' }),
+      useSecret({ isOpen: true, secretName: 'empty-secret', namespace: 'test-namespace' }),
     );
     await waitForNextUpdate();
 
@@ -151,7 +147,7 @@ describe('useSecret', () => {
     expect(error).toBeUndefined();
   });
 
-  it('uses empty string when entry has no base64', async () => {
+  it('models a redacted value separately from empty replacement text', async () => {
     const getSecret = jest.fn().mockResolvedValue({
       data: {
         type: 'Opaque',
@@ -168,11 +164,70 @@ describe('useSecret', () => {
     });
 
     const { result, waitForNextUpdate } = renderHook(() =>
-      useSecret({ isOpen: true, secretName: 'my-secret' }),
+      useSecret({ isOpen: true, secretName: 'my-secret', namespace: 'test-namespace' }),
     );
     await waitForNextUpdate();
 
     const [details] = result.current;
-    expect(details.keyValuePairs).toEqual([{ key: 'NO_BASE64', value: '' }]);
+    expect(details.keyValuePairs).toEqual([{ key: 'NO_BASE64', kind: 'unchanged' }]);
+  });
+
+  it('waits for a namespace before fetching secret metadata', () => {
+    const getSecret = jest.fn();
+    mockUseNotebookAPI.mockReturnValue({
+      api: { secrets: { getSecret } } as unknown as NotebookApis,
+      apiAvailable: true,
+      refreshAllAPI: jest.fn(),
+    });
+    const { result } = renderHook(() =>
+      useSecret({ isOpen: true, secretName: 'my-secret', namespace: '' }),
+    );
+    expect(getSecret).not.toHaveBeenCalled();
+    expect(result.current[1]).toBe(false);
+  });
+
+  it('surfaces a failed metadata request without loading editable data', async () => {
+    const failure = new Error('forbidden');
+    const getSecret = jest.fn().mockRejectedValue(failure);
+    mockUseNotebookAPI.mockReturnValue({
+      api: { secrets: { getSecret } } as unknown as NotebookApis,
+      apiAvailable: true,
+      refreshAllAPI: jest.fn(),
+    });
+    const { result, waitForNextUpdate } = renderHook(() =>
+      useSecret({ isOpen: true, secretName: 'my-secret', namespace: 'test-namespace' }),
+    );
+    await waitForNextUpdate();
+    expect(result.current[0].keyValuePairs).toEqual([]);
+    expect(result.current[1]).toBe(false);
+    expect(result.current[2]).toBe(failure);
+  });
+
+  it('clears previous keys when the secret target changes', async () => {
+    const getSecret = jest
+      .fn()
+      .mockResolvedValueOnce({
+        data: buildMockSecretResponse({ contents: { first: {} } }),
+      })
+      .mockResolvedValueOnce({
+        data: buildMockSecretResponse({ contents: { second: {} } }),
+      });
+    mockUseNotebookAPI.mockReturnValue({
+      api: { secrets: { getSecret } } as unknown as NotebookApis,
+      apiAvailable: true,
+      refreshAllAPI: jest.fn(),
+    });
+    const { result, rerender, waitForNextUpdate } = renderHook(
+      ({ namespace, secretName }) => useSecret({ isOpen: true, namespace, secretName }),
+      { initialProps: { namespace: 'namespace-a', secretName: 'secret-a' } },
+    );
+    await waitForNextUpdate();
+    expect(result.current[0].keyValuePairs).toEqual([{ key: 'first', kind: 'unchanged' }]);
+    rerender({ namespace: 'namespace-b', secretName: 'secret-b' });
+    expect(result.current[0].keyValuePairs).toEqual([]);
+    expect(result.current[1]).toBe(false);
+    await waitForNextUpdate();
+    expect(getSecret).toHaveBeenLastCalledWith('namespace-b', 'secret-b');
+    expect(result.current[0].keyValuePairs).toEqual([{ key: 'second', kind: 'unchanged' }]);
   });
 });

@@ -159,6 +159,10 @@ var _ = Describe("WorkspaceKinds Handler", func() {
 			Expect(item1.PodTemplate.StatefulSetMetadata.Labels).To(HaveKeyWithValue("my-sts-label", "my-value"))
 			Expect(item1.PodTemplate.StatefulSetMetadata.Annotations).To(HaveKeyWithValue("my-sts-annotation", "my-value"))
 
+			By("ensuring the serviceAccount.metadata from the WorkspaceKind is surfaced in the response")
+			Expect(item1.PodTemplate.ServiceAccount.Metadata.Labels).To(HaveKeyWithValue("my-sa-label", "my-value"))
+			Expect(item1.PodTemplate.ServiceAccount.Metadata.Annotations).To(HaveKeyWithValue("eks.amazonaws.com/role-arn", "arn:aws:iam::111122223333:role/my-role"))
+
 			By("ensuring the wrapped data can be marshaled to JSON and back to []WorkspaceKind")
 			dataJSON, err := json.Marshal(response.Data)
 			Expect(err).NotTo(HaveOccurred(), "failed to marshal data to JSON")
@@ -539,7 +543,6 @@ var _ = Describe("WorkspaceKinds Handler", func() {
 		var validYAML []byte
 
 		BeforeEach(func() {
-			//nolint:modernize
 			validYAML = []byte(fmt.Sprintf(`
 apiVersion: kubeflow.org/v1beta1
 kind: WorkspaceKind
@@ -554,7 +557,7 @@ spec:
     logo:
       url: "https://upload.wikimedia.org/wikipedia/commons/3/38/Jupyter_logo.svg"
   podTemplate:
-    volumeMounts:
+    volumeMountPaths:
       home: "/home/jovyan"
     ports:
       - id: "jupyterlab"
@@ -589,6 +592,21 @@ spec:
                 requests:
                   cpu: 100m
                   memory: 128Mi
+  activityRules:
+    - config:
+        secondsSinceActive: 3600
+      effect:
+        pauseWorkspace: false
+  filterRules:
+    - scope: IMAGE_CONFIG
+      effect:
+        ui:
+          hide: true
+      match:
+        - matchImageConfig:
+            selector:
+              matchLabels:
+                gpu: "true"
 `, newWorkspaceKindName))
 		})
 
@@ -630,6 +648,16 @@ spec:
 					commonModels.AnnotationUpdatedBy: adminUser,
 				},
 			))
+
+			By("unmarshalling the response JSON")
+			var response WorkspaceKindCreateEnvelope
+			Expect(json.Unmarshal(rr.Body.Bytes(), &response)).To(Succeed())
+
+			By("verifying the rules from the cluster object are returned")
+			Expect(createdWsk.Spec.ActivityRules).To(HaveLen(1))
+			Expect(createdWsk.Spec.FilterRules).To(HaveLen(1))
+			Expect(response.Data.ActivityRules).To(BeComparableTo(createdWsk.Spec.ActivityRules))
+			Expect(response.Data.FilterRules).To(BeComparableTo(createdWsk.Spec.FilterRules))
 		})
 
 		It("should fail to create a WorkspaceKind with no name in the YAML", func() {
@@ -1207,7 +1235,7 @@ metadata:
 			By("verifying immutable fields are unchanged in K8s")
 			wsk := &kubefloworgv1beta1.WorkspaceKind{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: wskName}, wsk)).To(Succeed())
-			Expect(wsk.Spec.PodTemplate.VolumeMounts.Home).To(Equal("/home/jovyan"))
+			Expect(wsk.Spec.PodTemplate.VolumeMountPaths.Home).To(Equal("/home/jovyan"))
 		})
 
 		It("should toggle option hidden and persist the change", func() {

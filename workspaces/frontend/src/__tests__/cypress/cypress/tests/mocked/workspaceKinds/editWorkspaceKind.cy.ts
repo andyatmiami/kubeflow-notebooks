@@ -1,3 +1,4 @@
+/* eslint-disable camelcase */
 import { mockModArchResponse } from 'mod-arch-core';
 import { editWorkspaceKind } from '~/__tests__/cypress/cypress/pages/workspaceKinds/editWorkspaceKind';
 import { workspaceKinds } from '~/__tests__/cypress/cypress/pages/workspaceKinds/workspaceKinds';
@@ -9,7 +10,11 @@ import {
   buildMockWorkspaceKind,
   buildMockWorkspaceKindUpdate,
 } from '~/shared/mock/mockBuilder';
-import type { WorkspacekindsWorkspaceKindListItem } from '~/generated/data-contracts';
+import {
+  FieldErrorType,
+  type WorkspacekindsWorkspaceKindListItem,
+  type WorkspacekindsWorkspaceKindUpdate,
+} from '~/generated/data-contracts';
 
 const DEFAULT_NAMESPACE = 'default';
 const TEST_WORKSPACE_KIND_NAME = 'test-workspace-kind';
@@ -101,6 +106,34 @@ const setupEditWorkspaceKind = (
 const visitEditWorkspaceKind = (kind: string) => {
   editWorkspaceKind.visit(kind);
   cy.wait('@getWorkspaceKind');
+};
+
+// Deny the workspacekinds list request that the admin-route guard relies on. The individual
+// workspacekind GET is still stubbed (and aliased) so the test can assert the guard prevents it
+// from firing; it is registered before the 403 list intercept, so the denied list response wins.
+const setupForbiddenEditWorkspaceKind = () => {
+  const mockNamespace = buildMockNamespace({ name: DEFAULT_NAMESPACE });
+  const mockWorkspaceKind = buildMockWorkspaceKind({ name: TEST_WORKSPACE_KIND_NAME });
+
+  cy.interceptApi(
+    'GET /api/:apiVersion/namespaces',
+    { path: { apiVersion: NOTEBOOKS_API_VERSION } },
+    mockModArchResponse([mockNamespace]),
+  ).as('getNamespaces');
+
+  cy.interceptApi(
+    'GET /api/:apiVersion/workspacekinds/:kind',
+    { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+    mockModArchResponse(buildMockWorkspaceKindUpdate(mockWorkspaceKind)),
+  ).as('getWorkspaceKind');
+
+  cy.interceptApi(
+    'GET /api/:apiVersion/workspacekinds',
+    { path: { apiVersion: NOTEBOOKS_API_VERSION } },
+    { error: { code: '403', message: 'Forbidden' } },
+  ).as('getWorkspaceKindsForbidden');
+
+  return { mockWorkspaceKind };
 };
 
 describe('Edit workspace kind', () => {
@@ -673,6 +706,120 @@ describe('Edit workspace kind', () => {
       editWorkspaceKind.assertPodConfigDisplayName(podConfigToEdit.displayName);
     });
 
+    describe('Pod configuration redirects', () => {
+      it('should configure, validate, and persist pod configuration redirect through Form, YAML, and save', () => {
+        const { mockWorkspaceKind } = setupEditWorkspaceKind();
+
+        cy.interceptApi(
+          'PUT /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          mockModArchResponse(buildMockWorkspaceKindUpdate(mockWorkspaceKind)),
+        ).as('updateWorkspaceKind');
+
+        visitEditWorkspaceKind(mockWorkspaceKind.name);
+
+        editWorkspaceKind.expandPodConfigSection();
+
+        // small_cpu is at index 1 and has no redirect configured initially
+        editWorkspaceKind.clickPodConfigTableRowKebab(1);
+        editWorkspaceKind.clickEditPodConfig();
+        editWorkspaceKind.assertPodConfigModalVisible(true);
+
+        // Expand Redirect section
+        editWorkspaceKind.expandPodConfigRedirectSection();
+
+        // 1. Select target first to reveal message inputs
+        editWorkspaceKind.selectPodConfigRedirectTo('medium_cpu');
+
+        // 2. Validate 1-character message: shows error and disables Save button
+        editWorkspaceKind.typePodConfigRedirectMessage('x');
+        editWorkspaceKind.assertPodConfigRedirectMessageErrorVisible(true);
+        editWorkspaceKind.assertPodConfigSaveEnabled(false);
+
+        // 3. Enter valid message and submit modal
+        const messageText = 'Use medium CPU configuration instead';
+        editWorkspaceKind.typePodConfigRedirectMessage(messageText);
+        editWorkspaceKind.assertPodConfigRedirectMessageErrorVisible(false);
+        editWorkspaceKind.assertPodConfigSaveEnabled(true);
+        editWorkspaceKind.submitPodConfigModal();
+        editWorkspaceKind.assertPodConfigModalVisible(false);
+
+        // 4. Form -> YAML tab switch preserves redirect
+        editWorkspaceKind.clickYamlTab();
+        editWorkspaceKind.assertYamlEditorVisible();
+
+        // 5. YAML -> Form tab switch preserves redirect
+        editWorkspaceKind.clickFormTab();
+        editWorkspaceKind.expandPodConfigSection();
+        editWorkspaceKind.clickPodConfigTableRowKebab(1);
+        editWorkspaceKind.clickEditPodConfig();
+        editWorkspaceKind.assertPodConfigModalVisible(true);
+        editWorkspaceKind.expandPodConfigRedirectSection();
+        editWorkspaceKind.findPodConfigRedirectToSelect().should('have.value', 'medium_cpu');
+        editWorkspaceKind.assertPodConfigRedirectMessage(messageText);
+
+        // 6. Changing redirect target and message level preserves message text
+        editWorkspaceKind.selectPodConfigRedirectTo('large_cpu');
+        editWorkspaceKind.selectPodConfigRedirectMsgLvl('Warning');
+        editWorkspaceKind.assertPodConfigRedirectMessage(messageText);
+        editWorkspaceKind.submitPodConfigModal();
+        editWorkspaceKind.assertPodConfigModalVisible(false);
+
+        // 7. Save main form and assert on PUT request payload
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@updateWorkspaceKind').then((interception) => {
+          expect(interception.request.method).to.equal('PUT');
+          const podConfigValues =
+            interception.request.body.data.podTemplate.options.podConfig.values;
+          const smallCpu = podConfigValues.find((v: { id: string }) => v.id === 'small_cpu');
+          expect(smallCpu.redirect).to.deep.equal({
+            to: 'large_cpu',
+            message: {
+              level: 'Warning',
+              text: messageText,
+            },
+          });
+        });
+      });
+
+      it('should remove an existing pod configuration redirect and save', () => {
+        const { mockWorkspaceKind } = setupEditWorkspaceKind();
+
+        cy.interceptApi(
+          'PUT /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          mockModArchResponse(buildMockWorkspaceKindUpdate(mockWorkspaceKind)),
+        ).as('updateWorkspaceKind');
+
+        visitEditWorkspaceKind(mockWorkspaceKind.name);
+
+        editWorkspaceKind.expandPodConfigSection();
+
+        // tiny_cpu is at index 0 and has an existing redirect to small_cpu
+        editWorkspaceKind.clickPodConfigTableRowKebab(0);
+        editWorkspaceKind.clickEditPodConfig();
+        editWorkspaceKind.assertPodConfigModalVisible(true);
+
+        editWorkspaceKind.expandPodConfigRedirectSection();
+        editWorkspaceKind.findPodConfigRedirectToSelect().should('have.value', 'small_cpu');
+
+        // Remove redirect by selecting empty option (No redirect)
+        editWorkspaceKind.selectPodConfigRedirectTo('');
+        editWorkspaceKind.submitPodConfigModal();
+        editWorkspaceKind.assertPodConfigModalVisible(false);
+
+        // Save main form and assert PUT payload has redirect omitted
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@updateWorkspaceKind').then((interception) => {
+          expect(interception.request.method).to.equal('PUT');
+          const podConfigValues =
+            interception.request.body.data.podTemplate.options.podConfig.values;
+          const tinyCpu = podConfigValues.find((v: { id: string }) => v.id === 'tiny_cpu');
+          expect(tinyCpu.redirect).to.equal(undefined);
+        });
+      });
+    });
+
     describe('Node selector in pod config modal', () => {
       it('should display node selector section in add pod config modal', () => {
         const { mockWorkspaceKind } = setupEditWorkspaceKind();
@@ -873,16 +1020,6 @@ describe('Edit workspace kind', () => {
         editWorkspaceKind.assertPodMetadataSectionVisible();
       });
 
-      it('should display additional volumes section when expanded', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.assertAdditionalVolumesSectionVisible();
-      });
-
       it('should add a new label', () => {
         const { mockWorkspaceKind } = setupEditWorkspaceKind();
 
@@ -1000,173 +1137,159 @@ describe('Edit workspace kind', () => {
         editWorkspaceKind.assertAnnotationKey(1, 'annotation2');
         editWorkspaceKind.assertAnnotationValue(1, 'value2');
       });
+    });
 
-      it('should open create volume modal when clicking Create Volume button', () => {
+    describe('Activity Probe', () => {
+      const probe = {
+        probeIntervalSeconds: 7200,
+        minProbeIntervalSeconds: 120,
+        podExec: { timeoutSeconds: 30, script: '#!/bin/sh\nexit 0' },
+      };
+      const pauseRule = { config: { secondsSinceActive: 3600 }, effect: { pauseWorkspace: true } };
+
+      const setupProbe = (
+        overrides: Pick<WorkspacekindsWorkspaceKindUpdate, 'activityRules'> & {
+          activityProbe?: WorkspacekindsWorkspaceKindUpdate['podTemplate']['activityProbe'];
+        } = {},
+      ) => {
         const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
+        const update = buildMockWorkspaceKindUpdate(mockWorkspaceKind);
+        update.podTemplate.activityProbe = overrides.activityProbe;
+        update.activityRules = overrides.activityRules;
+        cy.interceptApi(
+          'GET /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          mockModArchResponse(update),
+        ).as('getWorkspaceKind');
+        cy.interceptApi(
+          'PUT /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          mockModArchResponse(update),
+        ).as('saveProbe');
         visitEditWorkspaceKind(mockWorkspaceKind.name);
-
         editWorkspaceKind.expandPodTemplateSection();
+        return { update, mockWorkspaceKind };
+      };
 
-        editWorkspaceKind.clickCreateVolume();
-
-        editWorkspaceKind.assertVolumeModalVisible(true);
-        editWorkspaceKind.assertVolumeModalTitle('Create New Volume');
+      it('exposes probe defaults and groups timing fields responsively', () => {
+        cy.viewport(1600, 1000);
+        setupProbe();
+        editWorkspaceKind.assertActivityProbeEnabled(false);
+        editWorkspaceKind.toggleActivityProbe();
+        editWorkspaceKind.assertProbeTiming({ label: 'probe interval input', value: 1 });
+        editWorkspaceKind.assertProbeTiming({ label: 'minimum probe interval input', value: 5 });
+        editWorkspaceKind.assertProbeTiming({ label: 'probe script timeout input', value: 1 });
+        editWorkspaceKind.assertProbeSettingsGrouped();
+        editWorkspaceKind.assertProbeScriptContains('has_activity');
+        editWorkspaceKind.assertProbeTimingLayout(false);
+        cy.viewport(768, 1000);
+        editWorkspaceKind.assertProbeTimingLayout(true);
       });
 
-      it('should create a new volume', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.assertVolumeCount(0);
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('my-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.assertVolumeModalVisible(false);
-        editWorkspaceKind.assertVolumeCount(1);
-        editWorkspaceKind.assertVolumeInTable('my-pvc');
+      it('saves independent timing and script changes together with a pause rule', () => {
+        setupProbe({ activityProbe: probe });
+        editWorkspaceKind.setProbeTiming({ label: 'probe interval input', value: 3 });
+        editWorkspaceKind.setProbeTiming({ label: 'minimum probe interval input', value: 4 });
+        editWorkspaceKind.setProbeTiming({ label: 'probe script timeout input', value: 15 });
+        const script = '#!/bin/sh\n# custom activity detection\nexit 0';
+        editWorkspaceKind.setProbeScript(script);
+        editWorkspaceKind.clickAddActivityRule();
+        editWorkspaceKind.submitActivityRuleModal();
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@saveProbe').then(({ request }) => {
+          expect(request.body.data.podTemplate.activityProbe).to.deep.equal({
+            probeIntervalSeconds: 10800,
+            minProbeIntervalSeconds: 240,
+            podExec: { timeoutSeconds: 15, script },
+          });
+          expect(request.body.data.activityRules[0].effect.pauseWorkspace).to.equal(true);
+        });
+        workspaceKinds.verifyPageURL();
       });
 
-      it('should create a volume with read-only access', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('readonly-pvc');
-        editWorkspaceKind.toggleReadOnly();
-        editWorkspaceKind.assertReadOnlyChecked(true);
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.assertVolumeCount(1);
-        editWorkspaceKind.assertVolumeInTable('readonly-pvc');
+      it('retains pause rules and submits after the probe is disabled', () => {
+        setupProbe({ activityProbe: probe, activityRules: [pauseRule] });
+        editWorkspaceKind.toggleActivityProbe();
+        editWorkspaceKind.assertActivityRuleRowCount(1);
+        editWorkspaceKind.assertProbeDependencyError(false);
+        editWorkspaceKind.assertSubmitButtonDisabled(false);
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@saveProbe').then(({ request }) => {
+          expect(request.body.data.podTemplate.activityProbe).to.equal(undefined);
+          expect(request.body.data.activityRules).to.deep.equal([pauseRule]);
+        });
       });
 
-      it('should cancel volume creation', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('cancelled-pvc');
-        editWorkspaceKind.cancelVolumeModal();
-
-        editWorkspaceKind.assertVolumeModalVisible(false);
-        editWorkspaceKind.assertVolumeCount(0);
+      it('preserves an existing pause rule without a probe in both form and YAML views', () => {
+        setupProbe({ activityRules: [pauseRule] });
+        editWorkspaceKind.assertProbeDependencyError(false);
+        editWorkspaceKind.clickYamlTab();
+        editWorkspaceKind.assertProbeDependencyError(false);
+        editWorkspaceKind.assertSubmitButtonDisabled(true);
+        editWorkspaceKind.clickFormTab();
+        editWorkspaceKind.clickRemoveActivityRule(0);
+        editWorkspaceKind.assertProbeDependencyError(false);
+        editWorkspaceKind.assertSubmitButtonDisabled(false);
       });
 
-      it('should open edit volume modal when clicking edit from actions menu', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('edit-test-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.clickVolumeRowKebab(0);
-        editWorkspaceKind.clickEditVolume('edit-test-pvc');
-
-        editWorkspaceKind.assertVolumeModalVisible(true);
-        editWorkspaceKind.assertVolumeModalTitle('Edit Volume');
-        editWorkspaceKind.assertMountPath('/data/edit-test-pvc');
+      it('allows rules without the pause effect when no probe is enabled', () => {
+        setupProbe({
+          activityProbe: probe,
+          activityRules: [{ ...pauseRule, effect: { pauseWorkspace: false } }],
+        });
+        editWorkspaceKind.toggleActivityProbe();
+        editWorkspaceKind.assertProbeDependencyError(false);
+        editWorkspaceKind.assertSubmitButtonDisabled(false);
       });
 
-      it('should edit an existing volume mount path', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('original-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.clickVolumeRowKebab(0);
-        editWorkspaceKind.clickEditVolume('original-pvc');
-
-        editWorkspaceKind.typeMountPath('/edited');
-        editWorkspaceKind.submitVolumeModal();
-
-        editWorkspaceKind.assertVolumeCount(1);
-        editWorkspaceKind.assertVolumeInTable('original-pvc');
+      it('preserves probe edits when switching between form and YAML', () => {
+        setupProbe({ activityProbe: probe });
+        editWorkspaceKind.setProbeTiming({ label: 'probe script timeout input', value: 20 });
+        editWorkspaceKind.clickYamlTab();
+        editWorkspaceKind.clickFormTab();
+        editWorkspaceKind.assertProbeTiming({ label: 'probe script timeout input', value: 20 });
+        editWorkspaceKind.assertProbeScriptContains('exit 0');
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@saveProbe').then(({ request }) => {
+          expect(request.body.data.podTemplate.activityProbe.podExec.timeoutSeconds).to.equal(20);
+          expect(request.body.data.podTemplate.activityProbe.probeIntervalSeconds).to.equal(7200);
+        });
       });
 
-      it('should open detach modal when clicking detach from actions menu', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('detach-test-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.clickVolumeRowKebab(0);
-        editWorkspaceKind.clickDetachVolume();
-
-        editWorkspaceKind.assertDetachVolumeModalVisible(true);
+      it('preserves an empty script draft when the API rejects it', () => {
+        const { mockWorkspaceKind } = setupProbe({ activityProbe: probe });
+        cy.interceptApi(
+          'PUT /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          { error: { code: '422', message: 'activityProbe.podExec.script must not be empty' } },
+        ).as('emptyProbeScript');
+        editWorkspaceKind.setProbeScript('');
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@emptyProbeScript').then(({ request }) => {
+          expect(request.body.data.podTemplate.activityProbe.podExec.script).to.equal('');
+        });
+        editWorkspaceKind.assertErrorToastVisible();
+        editWorkspaceKind.assertProbeTiming({ label: 'probe script timeout input', value: 30 });
       });
 
-      it('should cancel volume detachment', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('cancel-detach-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.clickVolumeRowKebab(0);
-        editWorkspaceKind.clickDetachVolume();
-        editWorkspaceKind.cancelDetachVolume();
-
-        editWorkspaceKind.assertDetachVolumeModalVisible(false);
-        editWorkspaceKind.assertVolumeCount(1);
-        editWorkspaceKind.assertVolumeInTable('cancel-detach-pvc');
-      });
-
-      it('should detach a volume when confirming detachment', () => {
-        const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
-        visitEditWorkspaceKind(mockWorkspaceKind.name);
-
-        editWorkspaceKind.expandPodTemplateSection();
-
-        editWorkspaceKind.clickCreateVolume();
-        editWorkspaceKind.typePvcName('detach-pvc');
-        editWorkspaceKind.submitVolumeModal();
-        cy.wait('@createPvc');
-
-        editWorkspaceKind.assertVolumeCount(1);
-
-        editWorkspaceKind.clickVolumeRowKebab(0);
-        editWorkspaceKind.clickDetachVolume();
-        editWorkspaceKind.confirmDetachVolume();
-
-        editWorkspaceKind.assertDetachVolumeModalVisible(false);
-        editWorkspaceKind.assertVolumeCount(0);
+      it('surfaces invalid interval errors and preserves the draft for correction', () => {
+        const { mockWorkspaceKind } = setupProbe({ activityProbe: probe });
+        cy.interceptApi(
+          'PUT /api/:apiVersion/workspacekinds/:kind',
+          { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+          {
+            error: {
+              code: '422',
+              message: 'minProbeIntervalSeconds must be less than or equal to probeIntervalSeconds',
+            },
+          },
+        ).as('invalidProbe');
+        editWorkspaceKind.setProbeTiming({ label: 'minimum probe interval input', value: 121 });
+        editWorkspaceKind.clickSubmit();
+        cy.wait('@invalidProbe');
+        editWorkspaceKind.assertErrorToastVisible();
+        editWorkspaceKind.assertProbeTiming({ label: 'minimum probe interval input', value: 121 });
+        editWorkspaceKind.assertProbeScriptContains('exit 0');
       });
     });
 
@@ -1176,11 +1299,18 @@ describe('Edit workspace kind', () => {
           activityRules: [
             {
               config: { secondsSinceActive: 3600, minRunningSeconds: 300 },
-              match: {
-                matchNamespace: {
-                  selector: { matchLabels: { tier: 'development' } },
+              match: [
+                {
+                  matchNamespace: {
+                    selector: { matchLabels: { tier: 'development' } },
+                  },
                 },
-              },
+                {
+                  matchPodConfig: {
+                    selector: { matchLabels: { cpu: '100m' } },
+                  },
+                },
+              ],
               effect: { pauseWorkspace: true },
             },
             {
@@ -1197,9 +1327,16 @@ describe('Edit workspace kind', () => {
         editWorkspaceKind.assertActivityRuleRowCount(2);
         editWorkspaceKind.assertActivityRuleTimeoutCell(0, '1 hour');
         editWorkspaceKind.assertActivityRuleMinRunningCell(0, '5 minutes');
+        editWorkspaceKind.assertActivityRuleNamespaceMatchCell(0, 'tier=development');
+        editWorkspaceKind.assertActivityRulePodConfigMatchCell(0, 'cpu=100m');
         editWorkspaceKind.assertActivityRuleEffectCell(0, 'Pause Workspace');
         editWorkspaceKind.assertActivityRuleTimeoutCell(1, '1 day');
-        editWorkspaceKind.assertActivityRuleMinRunningCell(1, '-');
+        editWorkspaceKind.assertActivityRuleMinRunningCell(1, '0 seconds');
+        editWorkspaceKind.assertActivityRuleNamespaceMatchCell(1, '-');
+        editWorkspaceKind.assertActivityRulePodConfigMatchCell(1, '-');
+        editWorkspaceKind.assertActivityRuleEffectCell(0, 'Pause Workspace');
+        editWorkspaceKind.assertActivityRuleTimeoutCell(1, '1 day');
+        editWorkspaceKind.assertActivityRuleMinRunningCell(1, '0 seconds');
         editWorkspaceKind.assertActivityRuleEffectCell(1, 'Pause Workspace');
       });
 
@@ -1454,7 +1591,6 @@ describe('Edit workspace kind', () => {
 
     it('should display error when update API fails', () => {
       const { mockWorkspaceKind } = setupEditWorkspaceKind();
-
       cy.interceptApi(
         'PUT /api/:apiVersion/workspacekinds/:kind',
         { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
@@ -1465,18 +1601,44 @@ describe('Edit workspace kind', () => {
           },
         },
       ).as('updateWorkspaceKindError');
-
       visitEditWorkspaceKind(mockWorkspaceKind.name);
-
       editWorkspaceKind.expandPropertiesSection();
       editWorkspaceKind.typeDescription('Updated description');
-
       editWorkspaceKind.clickSubmit();
-
       cy.wait('@updateWorkspaceKindError');
-
       editWorkspaceKind.assertErrorToastVisible();
       editWorkspaceKind.verifyPageURL(mockWorkspaceKind.name);
+    });
+    it('should display structured 422 validation errors as a list in the error toast on edit', () => {
+      const { mockWorkspaceKind } = setupEditWorkspaceKind();
+      cy.interceptApi(
+        'PUT /api/:apiVersion/workspacekinds/:kind',
+        { path: { apiVersion: NOTEBOOKS_API_VERSION, kind: mockWorkspaceKind.name } },
+        {
+          error: {
+            code: '422',
+            message: 'request body was invalid',
+            cause: {
+              validation_errors: [
+                {
+                  field: 'spec.spawner.displayName',
+                  message: "Invalid value: 'displayName' contains invalid pattern",
+                  type: FieldErrorType.ErrorTypeInvalid,
+                },
+              ],
+            },
+          },
+        },
+      ).as('updateWorkspaceKind422Error');
+      visitEditWorkspaceKind(mockWorkspaceKind.name);
+      editWorkspaceKind.expandPropertiesSection();
+      editWorkspaceKind.typeDescription('Updated description');
+      editWorkspaceKind.clickSubmit();
+      cy.wait('@updateWorkspaceKind422Error');
+      editWorkspaceKind.assertErrorToastVisible();
+      editWorkspaceKind.assertErrorToastContainsListItem(
+        "spec.spawner.displayName: Invalid value: 'displayName' contains invalid pattern",
+      );
     });
   });
 
@@ -1496,7 +1658,22 @@ describe('Edit workspace kind', () => {
 
       editWorkspaceKind.assertFormTabActive();
       editWorkspaceKind.assertFormPropertiesVisible();
-      editWorkspaceKind.assertYamlEditorNotVisible();
+      editWorkspaceKind.assertYamlEditorNotCreated();
+    });
+
+    it('should not create the Monaco editor until the YAML tab is opened', () => {
+      const { mockWorkspaceKind } = setupEditWorkspaceKind();
+
+      visitEditWorkspaceKind(mockWorkspaceKind.name);
+
+      // The WorkspaceKind has to be loaded before the YAML tab can be opened.
+      editWorkspaceKind.assertWorkspaceKindName(mockWorkspaceKind.displayName);
+
+      editWorkspaceKind.assertYamlEditorNotCreated();
+
+      editWorkspaceKind.clickYamlTab();
+
+      editWorkspaceKind.assertYamlEditorVisible();
     });
 
     it('should switch to YAML tab and show editor', () => {
@@ -1598,6 +1775,28 @@ describe('Edit workspace kind', () => {
       editWorkspaceKind.clickRevert();
 
       editWorkspaceKind.assertSubmitButtonDisabled(true);
+    });
+  });
+
+  describe('Restricted access', () => {
+    it('shows the restricted-access message and never fetches the workspace kind on a forbidden list request', () => {
+      const { mockWorkspaceKind } = setupForbiddenEditWorkspaceKind();
+
+      // Navigate directly rather than via editWorkspaceKind.visit(), whose helper waits for
+      // the form page title that never renders when access is denied.
+      cy.visit(`/workspacekinds/${mockWorkspaceKind.name}/edit`);
+
+      cy.wait('@getWorkspaceKindsForbidden').its('response.statusCode').should('eq', 403);
+
+      cy.findByTestId('workspace-kinds-access-empty-state').should('be.visible');
+      cy.contains('WorkspaceKind management is restricted to administrators').should('be.visible');
+
+      editWorkspaceKind.findFormProperties().should('not.exist');
+      editWorkspaceKind.findSubmitButton().should('not.exist');
+      cy.findByTestId('app-page-title').should('not.exist');
+
+      // The guard short-circuits before the form mounts, so the individual kind is never fetched.
+      cy.get('@getWorkspaceKind.all').should('have.length', 0);
     });
   });
 });

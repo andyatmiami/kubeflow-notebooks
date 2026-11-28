@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
 import { useNotification } from 'mod-arch-core';
 import {
   Drawer,
@@ -40,6 +41,7 @@ import { useTypedNavigate } from '~/app/routerHelper';
 import { WorkspacekindsWorkspaceKindListItem } from '~/generated/data-contracts';
 import { LoadError } from '~/app/components/LoadError';
 import { LoadingSpinner } from '~/app/components/LoadingSpinner';
+import { WorkspaceKindsRestrictedAccess } from '~/app/components/WorkspaceKindsRestrictedAccess';
 import ToolbarFilter, { FilterConfigMap } from '~/shared/components/ToolbarFilter';
 import { useToolbarFilters, applyFilters } from '~/shared/hooks/useToolbarFilters';
 import {
@@ -47,6 +49,7 @@ import {
   extractWorkspaceKindStatusColor,
   WorkspaceKindStatus,
 } from '~/shared/utilities/WorkspaceKindUtils';
+import { useAppContext } from '~/app/context/AppContext';
 import { WorkspaceKindDetails } from './details/WorkspaceKindDetails';
 
 export enum ActionType {
@@ -74,7 +77,7 @@ type WorkspaceKindFilterKey = keyof typeof filterConfig;
 
 const visibleFilterKeys: readonly WorkspaceKindFilterKey[] = ['name', 'description', 'status'];
 
-export const WorkspaceKinds: React.FunctionComponent = () => {
+const WorkspaceKindsAdminView: React.FunctionComponent = () => {
   // Table columns
   const columns: WorkspaceKindsColumns = useMemo(
     () => ({
@@ -295,6 +298,9 @@ export const WorkspaceKinds: React.FunctionComponent = () => {
   );
 
   if (workspaceKindsError) {
+    if (axios.isAxiosError(workspaceKindsError) && workspaceKindsError.response?.status === 403) {
+      return <WorkspaceKindsRestrictedAccess />;
+    }
     return <LoadError title="Failed to load workspace kinds" error={workspaceKindsError} />;
   }
 
@@ -462,11 +468,13 @@ export const WorkspaceKinds: React.FunctionComponent = () => {
                     </Tbody>
                   ))}
               {filteredWorkspaceKinds.length === 0 && (
-                <Tr>
-                  <Td colSpan={8} id="empty-state">
-                    <Bullseye>{emptyState}</Bullseye>
-                  </Td>
-                </Tr>
+                <Tbody>
+                  <Tr>
+                    <Td colSpan={8} id="empty-state">
+                      <Bullseye>{emptyState}</Bullseye>
+                    </Td>
+                  </Tr>
+                </Tbody>
               )}
             </Table>
             <Pagination
@@ -502,4 +510,15 @@ export const WorkspaceKinds: React.FunctionComponent = () => {
       )}
     </Drawer>
   );
+};
+
+export const WorkspaceKinds: React.FunctionComponent = () => {
+  const { user } = useAppContext();
+  const canManageWorkspaceKinds = Boolean(user?.clusterAdmin);
+
+  if (!canManageWorkspaceKinds) {
+    return <WorkspaceKindsRestrictedAccess />;
+  }
+
+  return <WorkspaceKindsAdminView />;
 };

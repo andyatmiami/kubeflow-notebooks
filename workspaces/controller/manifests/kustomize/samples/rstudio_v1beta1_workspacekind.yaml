@@ -40,14 +40,11 @@ spec:
   activityRules:
     - config:
         secondsSinceActive: 7200
-      match: {}
+      match: []
       effect:
         pauseWorkspace: true
 
   podTemplate:
-    podMetadata:
-      labels: {}
-      annotations: {}
     activityProbe:
       minProbeIntervalSeconds: 300
       probeIntervalSeconds: 3600
@@ -58,7 +55,7 @@ spec:
           # A mock probe that always reports activity (replace with real detection logic)
           echo '{"has_activity": true}' > "$OUTPUT_JSON_PATH"
           exit 0
-    volumeMounts:
+    volumeMountPaths:
       home: "/home/jovyan"
     ports:
       - id: "rstudio"
@@ -70,42 +67,44 @@ spec:
             set:
               "X-RStudio-Root-Path": |-
                 {{ httpPathPrefix "rstudio" }}
-    extraEnv: []
-    extraVolumeMounts:
-      - name: "dshm"
-        mountPath: "/dev/shm"
-    extraVolumes:
-      - name: "dshm"
-        emptyDir:
-          medium: "Memory"
-    securityContext:
-      fsGroup: 100
-      seccompProfile:
-        type: RuntimeDefault
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop:
-          - ALL
-      runAsNonRoot: true
-      seccompProfile:
-        type: RuntimeDefault
+    podSpec:
+      securityContext:
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
+      extraVolumes:
+        - name: "dshm"
+          emptyDir:
+            medium: "Memory"
+      mainContainer:
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        extraEnv: []
+        extraVolumeMounts:
+          - name: "dshm"
+            mountPath: "/dev/shm"
     options:
       imageConfig:
         spawner:
-          default: "rstudio-tidyverse:v1.10.0"
+          default: "rstudio-tidyverse:v1.11.1"
         values:
-          - id: "rstudio-tidyverse:v1.10.0"
+          - id: "rstudio-tidyverse:v1.11.1"
             spawner:
-              displayName: "rstudio-tidyverse:v1.10.0"
+              displayName: "rstudio-tidyverse:v1.11.1"
               description: "RStudio, with Tidyverse and Conda Python"
               labels:
                 - key: "python_version"
-                  value: "3.11.11"
+                  value: "3.12.13"
                 - key: "r_version"
-                  value: "4.4.2"
+                  value: "4.5.3"
             spec:
-              image: "ghcr.io/kubeflow/kubeflow/notebook-servers/rstudio-tidyverse:v1.10.0"
+              image: "ghcr.io/kubeflow/kubeflow/notebook-servers/rstudio-tidyverse:v1.11.1"
               imagePullPolicy: "IfNotPresent"
               ports:
                 - id: "rstudio"

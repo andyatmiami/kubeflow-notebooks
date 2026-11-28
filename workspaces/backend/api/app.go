@@ -71,7 +71,7 @@ func NewApp(
 	app := &App{
 		Config:               cfg,
 		logger:               logger,
-		repositories:         repositories.NewRepositories(cfg, cl, configMapClient, clientset),
+		repositories:         repositories.NewRepositories(cfg, cl, configMapClient, clientset, logger),
 		Scheme:               scheme,
 		StrictYamlSerializer: yamlSerializerInfo.StrictSerializer,
 		RequestAuthN:         reqAuthN,
@@ -137,5 +137,5 @@ func (a *App) Routes() http.Handler {
 
 	handler := gzhttp.GzipHandler(router)
 
-	return a.recoverPanic(a.enableCORS(handler))
+	return a.recoverPanic(a.enableCORS(a.withRequestTimeout(handler)))
 }

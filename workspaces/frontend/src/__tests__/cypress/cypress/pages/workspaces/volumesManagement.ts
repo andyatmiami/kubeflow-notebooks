@@ -90,9 +90,35 @@ class VolumesManagementPage {
     >;
   }
 
-  clickHomeVolumeEditAction(mountPath: string): Cypress.Chainable<JQuery<HTMLElement>> {
-    this.findHomeVolumesTable().findByTestId(`volume-kebab-${mountPath}`).click();
-    return cy.findByTestId(`edit-volume-${mountPath}`).click();
+  assertHomeVolumeMountPath(
+    pvcName: string,
+    mountPath: string,
+  ): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findHomeVolumeRow(pvcName)
+      .find('[data-label="Mount Path"]')
+      .should('have.text', mountPath);
+  }
+
+  assertHomeVolumeMountPathLocked(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findHomeVolumesTable()
+      .findByTestId(`edit-mount-path-${pvcName}`)
+      .should('be.disabled');
+  }
+
+  clickHomeVolumeEditAction(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    this.findHomeVolumesTable().findByTestId(`volume-kebab-${pvcName}`).click();
+    return cy.findByTestId(`edit-volume-${pvcName}`).click();
+  }
+
+  // Inline Mount Path Editing
+  clickVolumeMountPathEdit(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findVolumesTable().findByTestId(`edit-mount-path-${pvcName}`).click();
+  }
+
+  assertVolumeMountPathEditing(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findVolumesTable()
+      .findByTestId(`edit-mount-path-input-${pvcName}`)
+      .should('be.visible');
   }
 
   // Row Actions
@@ -134,6 +160,14 @@ class VolumesAttachModal {
     return this.findPVCSelect().click();
   }
 
+  assertPVCOptionAvailable(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    this.openPVCDropdown();
+    return cy
+      .contains('.pf-v6-c-menu__list-item', pvcName)
+      .should('be.visible')
+      .and('not.have.class', 'pf-m-disabled');
+  }
+
   selectPVC(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
     this.openPVCDropdown();
     return cy.contains('.pf-v6-c-menu__list-item', pvcName).click() as unknown as Cypress.Chainable<
@@ -146,6 +180,50 @@ class VolumesAttachModal {
     return cy
       .contains('.pf-v6-c-menu__list-item', pvcName)
       .should('have.class', 'pf-m-disabled') as unknown as Cypress.Chainable<JQuery<HTMLElement>>;
+  }
+
+  assertPVCAriaDisabled(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    this.openPVCDropdown();
+    return cy
+      .findByTestId(`pvc-option-${pvcName}`)
+      .closest('button, a')
+      .should('have.attr', 'aria-disabled', 'true') as unknown as Cypress.Chainable<
+      JQuery<HTMLElement>
+    >;
+  }
+
+  hoverPVCOption(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.findByTestId(`pvc-option-${pvcName}`).closest('button, a').trigger('mouseenter');
+  }
+
+  assertPVCTooltipText(pvcName: string, text: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy
+      .findByTestId(`pvc-option-tooltip-${pvcName}`)
+      .should('be.visible')
+      .and('have.text', text)
+      .closest('[role="tooltip"]')
+      .should('be.visible');
+  }
+
+  /**
+   * Asserts that a PVC option is enabled (not disabled or aria-disabled) and selects it.
+   * Uses the stable data-testid selector added to the option description.
+   */
+  assertEnabledAndSelectPVC(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    this.openPVCDropdown();
+    return cy
+      .findByTestId(`pvc-option-${pvcName}`)
+      .closest('li')
+      .should('not.have.class', 'pf-m-disabled')
+      .and('not.have.class', 'pf-m-aria-disabled')
+      .click() as unknown as Cypress.Chainable<JQuery<HTMLElement>>;
+  }
+
+  clickDisabledPVCOption(pvcName: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy
+      .findByTestId(`pvc-option-${pvcName}`)
+      .closest('li')
+      .click() as unknown as Cypress.Chainable<JQuery<HTMLElement>>;
   }
 
   // Mount Path
@@ -179,6 +257,10 @@ class VolumesAttachModal {
 
   assertInUseWarningVisible(): Cypress.Chainable<JQuery<HTMLElement>> {
     return this.findAlert('warning').should('be.visible');
+  }
+
+  assertInUseWarningTitle(text: string): Cypress.Chainable<JQuery<HTMLElement>> {
+    return this.findAlert('warning').find('.pf-v6-c-alert__title').should('contain', text);
   }
 
   assertInUseDangerVisible(): Cypress.Chainable<JQuery<HTMLElement>> {
@@ -281,6 +363,12 @@ class VolumesCreateModal {
 
   assertAccessModeSelected(mode: string): Cypress.Chainable<JQuery<HTMLElement>> {
     return this.findAccessModeSelect().should('contain.text', mode);
+  }
+
+  // Mount Path
+  assertMountPathLocked(): void {
+    this.find().findByTestId('mount-path-input').should('be.disabled');
+    this.find().findByTestId('mount-path-edit').should('not.exist');
   }
 
   // Read-only Switch

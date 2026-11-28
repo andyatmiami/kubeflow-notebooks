@@ -26,7 +26,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -105,8 +107,29 @@ var _ = BeforeSuite(func() {
 	By("setting up the controller manager")
 	k8sManager, err = ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme.Scheme,
+		// NOTE: matches cmd/main.go, the controller relies on its field owner to find the
+		//       `metadata.managedFields` it owns (e.g. ServiceAccount labels/annotations)
+		Client: client.Options{
+			FieldOwner: helper.ControllerFieldOwner,
+		},
 		Metrics: metricsserver.Options{
 			BindAddress: "0", // disable metrics serving
+		},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&v1.Event{}: {
+					// Filter at the apiserver/etcd level so only Warning events are streamed & cached.
+					// NOTE: Kubernetes field selectors do not support OR / set membership (e.g.
+					// involvedObject.kind in (Pod, StatefulSet)). Filtering for Pod and StatefulSet
+					// kinds specifically is handled client-side by the controller's event predicate.
+					Field: fields.SelectorFromSet(fields.Set{
+						"type": v1.EventTypeWarning,
+					}),
+					// NOTE: this mirrors `cmd/main.go`, so that the tests which read Events from the
+					//       cache would catch the transform stripping a field the controller needs.
+					Transform: helper.StripEventForCache,
+				},
+			},
 		},
 	})
 	Expect(err).NotTo(HaveOccurred())
@@ -114,7 +137,8 @@ var _ = BeforeSuite(func() {
 	envConfig := &config.EnvConfig{
 		// TODO: make true once we install Istio CRDs in EnvTest.
 		//       also create unit tests to ensure VirtualService is created by controller.
-		UseIstio: false,
+		UseIstio:           false,
+		WatchWarningEvents: true,
 	}
 
 	By("setting up the field indexers for the controller manager")
@@ -254,13 +278,11 @@ func NewExampleWorkspaceKind1(name string) *kubefloworgv1beta1.WorkspaceKind {
 				ActivityProbe: &kubefloworgv1beta1.ActivityProbe{
 					MinProbeIntervalSeconds: new(int32(300)),
 					ProbeIntervalSeconds:    new(int32(3600)),
-					Jupyter: &kubefloworgv1beta1.ActivityProbeJupyter{
-						LastActivity: true,
-						PortId:       "jupyterlab",
+					PodExec: kubefloworgv1beta1.ActivityProbePodExec{
+						Script: "#!/usr/bin/env bash\necho '{\"has_activity\": true}' > \"$OUTPUT_JSON_PATH\"",
 					},
 				},
-				Probes: &kubefloworgv1beta1.WorkspaceKindProbes{},
-				VolumeMounts: kubefloworgv1beta1.WorkspaceKindVolumeMounts{
+				VolumeMountPaths: kubefloworgv1beta1.WorkspaceKindVolumeMountPaths{
 					Home: "/home/jovyan",
 				},
 				Ports: []kubefloworgv1beta1.WorkspaceKindPort{
@@ -278,37 +300,41 @@ func NewExampleWorkspaceKind1(name string) *kubefloworgv1beta1.WorkspaceKind {
 						},
 					},
 				},
-				ExtraEnv: []v1.EnvVar{
-					{
-						Name:  "NB_PREFIX",
-						Value: `{{ httpPathPrefix "jupyterlab" }}`,
+				PodSpec: kubefloworgv1beta1.WorkspaceKindPodSpec{
+					SecurityContext: &v1.PodSecurityContext{
+						FSGroup: new(int64(100)),
 					},
-				},
-				ExtraVolumeMounts: []v1.VolumeMount{
-					{
-						Name:      "dshm",
-						MountPath: "/dev/shm",
-					},
-				},
-				ExtraVolumes: []v1.Volume{
-					{
-						Name: "dshm",
-						VolumeSource: v1.VolumeSource{
-							EmptyDir: &v1.EmptyDirVolumeSource{
-								Medium: v1.StorageMediumMemory,
+					ExtraVolumes: []v1.Volume{
+						{
+							Name: "dshm",
+							VolumeSource: v1.VolumeSource{
+								EmptyDir: &v1.EmptyDirVolumeSource{
+									Medium: v1.StorageMediumMemory,
+								},
 							},
 						},
 					},
-				},
-				SecurityContext: &v1.PodSecurityContext{
-					FSGroup: new(int64(100)),
-				},
-				ContainerSecurityContext: &v1.SecurityContext{
-					AllowPrivilegeEscalation: new(false),
-					Capabilities: &v1.Capabilities{
-						Drop: []v1.Capability{"ALL"},
+					MainContainer: kubefloworgv1beta1.WorkspaceKindMainContainer{
+						SecurityContext: &v1.SecurityContext{
+							AllowPrivilegeEscalation: new(false),
+							Capabilities: &v1.Capabilities{
+								Drop: []v1.Capability{"ALL"},
+							},
+							RunAsNonRoot: new(true),
+						},
+						ExtraEnv: []v1.EnvVar{
+							{
+								Name:  "NB_PREFIX",
+								Value: `{{ httpPathPrefix "jupyterlab" }}`,
+							},
+						},
+						ExtraVolumeMounts: []v1.VolumeMount{
+							{
+								Name:      "dshm",
+								MountPath: "/dev/shm",
+							},
+						},
 					},
-					RunAsNonRoot: new(true),
 				},
 				Options: kubefloworgv1beta1.WorkspaceKindPodOptions{
 					ImageConfig: kubefloworgv1beta1.ImageConfig{

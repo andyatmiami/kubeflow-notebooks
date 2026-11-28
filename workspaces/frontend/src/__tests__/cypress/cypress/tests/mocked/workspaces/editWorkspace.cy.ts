@@ -3,10 +3,19 @@ import { editWorkspace } from '~/__tests__/cypress/cypress/pages/workspaces/edit
 import { workspaces } from '~/__tests__/cypress/cypress/pages/workspaces/workspaces';
 import {
   volumesManagement,
+  volumesAttachModal,
+  volumesCreateModal,
   volumesDetachModal,
 } from '~/__tests__/cypress/cypress/pages/workspaces/volumesManagement';
 import {
+  secretsManagement,
+  secretsAttachModal,
+} from '~/__tests__/cypress/cypress/pages/workspaces/secretsManagement';
+import {
   buildMockNamespace,
+  buildMockPVC,
+  buildMockSecret,
+  buildMockStorageClass,
   buildMockWorkspace,
   buildMockWorkspaceKind,
   buildMockWorkspaceKindInfo,
@@ -15,6 +24,7 @@ import {
 import { NOTEBOOKS_API_VERSION } from '~/__tests__/cypress/cypress/support/commands/api';
 import { interceptListValues } from '~/__tests__/cypress/cypress/utils/testBuilders';
 import { V1Beta1WorkspaceState } from '~/generated/data-contracts';
+import type { WorkspacesPodVolumesMutate } from '~/generated/data-contracts';
 import { toastNotification } from '~/__tests__/cypress/cypress/pages/components/toastNotification';
 
 const DEFAULT_NAMESPACE = 'default';
@@ -27,14 +37,36 @@ type EditWorkspaceSetup = {
   mockNamespace: ReturnType<typeof buildMockNamespace>;
   mockWorkspace: ReturnType<typeof buildMockWorkspace>;
   mockWorkspaceKind: ReturnType<typeof buildMockWorkspaceKind>;
+  mockWorkspaceUpdateResponse: ReturnType<typeof buildMockWorkspaceUpdate>;
 };
 
-const setupEditWorkspace = (): EditWorkspaceSetup => {
-  const mockNamespace = buildMockNamespace({ name: DEFAULT_NAMESPACE });
+type EditWorkspaceOptions = {
+  displayName?: string;
+  revision?: string;
+  paused?: boolean;
+  globalNamespace?: string;
+  workspaceNamespace?: string;
+  initialVolumes?: WorkspacesPodVolumesMutate['data'];
+  initialSecrets?: WorkspacesPodVolumesMutate['secrets'];
+};
+
+const setupEditWorkspace = ({
+  displayName = TEST_WORKSPACE_NAME,
+  revision = 'opaque/revision:17',
+  paused = false,
+  globalNamespace = DEFAULT_NAMESPACE,
+  workspaceNamespace = globalNamespace,
+  initialVolumes = [
+    { pvcName: 'data-volume-1', mountPath: '/data1', readOnly: false },
+    { pvcName: 'data-volume-2', mountPath: '/data2', readOnly: true },
+  ],
+  initialSecrets = [{ secretName: 'secret-1', mountPath: '/secrets/secret1', defaultMode: 420 }],
+}: EditWorkspaceOptions = {}): EditWorkspaceSetup => {
+  const mockNamespace = buildMockNamespace({ name: globalNamespace });
   const mockWorkspaceKind = buildMockWorkspaceKind({ name: WORKSPACE_KIND_NAME });
   const mockWorkspace = buildMockWorkspace({
     name: TEST_WORKSPACE_NAME,
-    namespace: mockNamespace.name,
+    namespace: workspaceNamespace,
     workspaceKind: buildMockWorkspaceKindInfo({ name: WORKSPACE_KIND_NAME }),
     state: V1Beta1WorkspaceState.WorkspaceStateRunning,
     podTemplate: {
@@ -60,6 +92,9 @@ const setupEditWorkspace = (): EditWorkspaceSetup => {
   });
 
   const mockWorkspaceUpdateResponse = buildMockWorkspaceUpdate({
+    displayName,
+    revision,
+    paused,
     podTemplate: {
       options: {
         imageConfig: IMAGE_CONFIG_ID,
@@ -69,14 +104,7 @@ const setupEditWorkspace = (): EditWorkspaceSetup => {
         labels: { testLabel: 'testValue' },
         annotations: { testAnnotation: 'testAnnotationValue' },
       },
-      volumes: {
-        home: '/home',
-        data: [
-          { pvcName: 'data-volume-1', mountPath: '/data1', readOnly: false },
-          { pvcName: 'data-volume-2', mountPath: '/data2', readOnly: true },
-        ],
-        secrets: [{ secretName: 'secret-1', mountPath: '/secrets/secret1', defaultMode: 420 }],
-      },
+      volumes: { home: 'home-pvc', data: initialVolumes, secrets: initialSecrets },
     },
   });
 
@@ -97,7 +125,7 @@ const setupEditWorkspace = (): EditWorkspaceSetup => {
     {
       path: {
         apiVersion: NOTEBOOKS_API_VERSION,
-        namespace: mockNamespace.name,
+        namespace: workspaceNamespace,
         workspaceName: mockWorkspace.name,
       },
     },
@@ -111,7 +139,7 @@ const setupEditWorkspace = (): EditWorkspaceSetup => {
   ).as('getWorkspaceKinds');
   interceptListValues(mockWorkspaceKind);
 
-  return { mockNamespace, mockWorkspace, mockWorkspaceKind };
+  return { mockNamespace, mockWorkspace, mockWorkspaceKind, mockWorkspaceUpdateResponse };
 };
 
 const visitEditWorkspace = () => {
@@ -171,8 +199,11 @@ describe('Edit workspace', () => {
       workspaces.verifyPageURL();
     });
 
-    it('should update workspace when clicking Save button', () => {
-      const { mockNamespace } = setupEditWorkspace();
+    it('preserves existing configuration and resumes a paused workspace when saving', () => {
+      const { mockNamespace, mockWorkspaceUpdateResponse } = setupEditWorkspace({
+        displayName: 'Research notebook',
+        paused: true,
+      });
 
       cy.interceptApi(
         'PUT /api/:apiVersion/workspaces/:namespace/:workspaceName',
@@ -198,13 +229,54 @@ describe('Edit workspace', () => {
 
       cy.wait('@updateWorkspace').then((interception) => {
         expect(interception.request.method).to.equal('PUT');
+        expect(interception.request.body).to.deep.equal({
+          data: { ...mockWorkspaceUpdateResponse, paused: false },
+        });
       });
 
       workspaces.verifyPageURL();
       toastNotification.assertSuccessAlertExists();
       toastNotification.assertSuccessAlertContainsMessage(
-        `Workspace '${TEST_WORKSPACE_NAME}' updated successfully`,
+        `Workspace '${mockWorkspaceUpdateResponse.displayName}' updated successfully`,
       );
+    });
+
+    it('keeps stale revision errors visible and preserves configuration in the rejected request', () => {
+      const { mockWorkspaceUpdateResponse } = setupEditWorkspace({
+        displayName: 'Research notebook',
+        revision: 'opaque/stale:17',
+      });
+      cy.interceptApi(
+        'PUT /api/:apiVersion/workspaces/:namespace/:workspaceName',
+        {
+          path: {
+            apiVersion: NOTEBOOKS_API_VERSION,
+            namespace: DEFAULT_NAMESPACE,
+            workspaceName: TEST_WORKSPACE_NAME,
+          },
+        },
+        { error: { code: '409', message: 'Workspace revision is stale. Reload before saving.' } },
+      ).as('staleUpdate');
+
+      visitEditWorkspace();
+      cy.wait('@getWorkspace');
+      cy.wait('@getWorkspaceKinds');
+      editWorkspace.clickNext();
+      editWorkspace.advancePastRedirectModal();
+      editWorkspace.advancePastRedirectModal();
+      editWorkspace.assertDisplayName('Research notebook');
+      editWorkspace.clickNext();
+      editWorkspace.clickSave();
+
+      cy.wait('@staleUpdate').then(({ request, response }) => {
+        expect(request.body).to.deep.equal({ data: mockWorkspaceUpdateResponse });
+        expect(response?.statusCode).to.equal(409);
+      });
+      editWorkspace.assertSubmissionError('Workspace revision is stale. Reload before saving.');
+      editWorkspace.assertSaveButtonEnabled();
+      editWorkspace.verifyPageURL();
+      cy.get('@staleUpdate.all').should('have.length', 1);
+      cy.get('@getWorkspace.all').should('have.length', 1);
     });
 
     it('should send updated values in the request payload', () => {
@@ -250,6 +322,40 @@ describe('Edit workspace', () => {
         const requestBody = interception.request.body.data;
         expect(requestBody.podTemplate.options.imageConfig).to.equal(newImageConfigId);
         expect(requestBody.podTemplate.options.podConfig).to.equal(newPodConfigId);
+        expect(requestBody.displayName).to.equal(TEST_WORKSPACE_NAME);
+      });
+    });
+
+    it('should send an updated display name in the request payload', () => {
+      const { mockNamespace } = setupEditWorkspace();
+
+      cy.interceptApi(
+        'PUT /api/:apiVersion/workspaces/:namespace/:workspaceName',
+        {
+          path: {
+            apiVersion: NOTEBOOKS_API_VERSION,
+            namespace: mockNamespace.name,
+            workspaceName: TEST_WORKSPACE_NAME,
+          },
+        },
+        mockModArchResponse(buildMockWorkspaceUpdate({})),
+      ).as('updateWorkspace');
+
+      visitEditWorkspace();
+
+      cy.wait('@getWorkspaceKinds');
+      editWorkspace.clickNext();
+      editWorkspace.advancePastRedirectModal();
+      editWorkspace.advancePastRedirectModal();
+
+      editWorkspace.typeDisplayName('Updated Display Name');
+
+      editWorkspace.clickNext();
+      editWorkspace.clickSave();
+
+      cy.wait('@updateWorkspace').then((interception) => {
+        const requestBody = interception.request.body.data;
+        expect(requestBody.displayName).to.equal('Updated Display Name');
       });
     });
   });
@@ -298,10 +404,15 @@ describe('Edit workspace', () => {
       editWorkspace.advancePastRedirectModal();
       editWorkspace.advancePastRedirectModal();
 
-      editWorkspace.assertWorkspaceName(TEST_WORKSPACE_NAME);
+      editWorkspace.assertDisplayName(TEST_WORKSPACE_NAME);
+      editWorkspace.assertResourceName(TEST_WORKSPACE_NAME);
 
       editWorkspace.assertVolumesCount(2);
+      editWorkspace.scrollSecretsIntoView();
       editWorkspace.assertSecretsCount(1);
+
+      editWorkspace.assertDataVolumesSectionExpanded();
+      editWorkspace.assertSecretsSectionExpanded();
     });
   });
 
@@ -383,7 +494,7 @@ describe('Edit workspace', () => {
       editWorkspace.assertKindSelected(WORKSPACE_KIND_NAME);
     });
 
-    it('should display helper text that workspace name cannot be changed', () => {
+    it('should display helper text that resource name cannot be changed', () => {
       setupEditWorkspace();
 
       visitEditWorkspace();
@@ -393,10 +504,10 @@ describe('Edit workspace', () => {
       editWorkspace.advancePastRedirectModal();
       editWorkspace.advancePastRedirectModal();
 
-      editWorkspace.assertWorkspaceNameCannotBeChangedHelperTextVisible();
+      editWorkspace.assertResourceNameCannotBeChangedHelperTextVisible();
     });
 
-    it('should have workspace name input disabled', () => {
+    it('should show the resource name as read-only, non-editable text', () => {
       setupEditWorkspace();
 
       visitEditWorkspace();
@@ -406,7 +517,24 @@ describe('Edit workspace', () => {
       editWorkspace.advancePastRedirectModal();
       editWorkspace.advancePastRedirectModal();
 
-      editWorkspace.assertWorkspaceNameInputDisabled();
+      editWorkspace.assertResourceNameNotEditable();
+    });
+
+    it('should allow editing the display name', () => {
+      setupEditWorkspace();
+
+      visitEditWorkspace();
+
+      cy.wait('@getWorkspaceKinds');
+      editWorkspace.clickNext();
+      editWorkspace.advancePastRedirectModal();
+      editWorkspace.advancePastRedirectModal();
+
+      editWorkspace.assertDisplayNameInputEnabled();
+      editWorkspace.typeDisplayName('Updated Display Name');
+      editWorkspace.assertDisplayName('Updated Display Name');
+      // Editing the display name must never change the immutable resource name
+      editWorkspace.assertResourceName(TEST_WORKSPACE_NAME);
     });
   });
 
@@ -486,7 +614,6 @@ describe('Edit workspace — volume detach behavior', () => {
     editWorkspace.advancePastRedirectModal(); // image → pod config
     editWorkspace.advancePastRedirectModal(); // pod config → properties
 
-    volumesManagement.expandVolumesSection();
     cy.wait('@listPVCs');
   });
 
@@ -515,5 +642,141 @@ describe('Edit workspace — volume detach behavior', () => {
     // Volume is removed from the table; delete API must not have been called.
     volumesManagement.assertVolumeRowNotExists('data-volume-1');
     cy.get('@deletePVC.all').should('have.length', 0);
+  });
+});
+
+describe('Edit workspace — home volume mount path', () => {
+  const HOME_PVC_NAME = 'home-pvc';
+  const HOME_MOUNT_PATH = '/home/jovyan';
+
+  beforeEach(() => {
+    setupEditWorkspace();
+
+    cy.interceptApi(
+      'GET /api/:apiVersion/persistentvolumeclaims/:namespace',
+      { path: { apiVersion: NOTEBOOKS_API_VERSION, namespace: DEFAULT_NAMESPACE } },
+      mockModArchResponse([]),
+    ).as('listPVCs');
+
+    cy.interceptApi(
+      'GET /api/:apiVersion/storageclasses',
+      { path: { apiVersion: NOTEBOOKS_API_VERSION } },
+      mockModArchResponse([buildMockStorageClass()]),
+    ).as('listStorageClasses');
+
+    visitEditWorkspace();
+    cy.wait('@getWorkspaceKinds');
+    editWorkspace.clickNext(); // workspace kind → image
+    editWorkspace.advancePastRedirectModal(); // image → pod config
+    editWorkspace.advancePastRedirectModal(); // pod config → properties
+  });
+
+  it('should display the home mount path defined by the workspace kind', () => {
+    volumesManagement.assertHomeVolumeMountPath(HOME_PVC_NAME, HOME_MOUNT_PATH);
+  });
+
+  it('should not allow editing the home mount path from the volumes table', () => {
+    volumesManagement.assertHomeVolumeMountPathLocked(HOME_PVC_NAME);
+  });
+
+  it('should not allow editing the home mount path from the edit volume modal', () => {
+    volumesManagement.clickHomeVolumeEditAction(HOME_PVC_NAME);
+    volumesCreateModal.assertModalVisible();
+
+    volumesCreateModal.assertMountPathLocked();
+    volumesCreateModal.assertReadOnlySwitchNotExists();
+  });
+
+  it('should allow editing data volume mount paths', () => {
+    volumesManagement.clickVolumeMountPathEdit('data-volume-1');
+
+    volumesManagement.assertVolumeMountPathEditing('data-volume-1');
+  });
+});
+
+describe('Edit workspace — namespace resolved from the workspace, not the global namespace selector', () => {
+  const GLOBAL_NAMESPACE = 'default';
+  const WORKSPACE_NAMESPACE = 'team-a';
+  const AVAILABLE_VOLUME = 'workspace-volume';
+  const AVAILABLE_SECRET = 'workspace-secret';
+
+  const setupWorkspaceNamespaceResources = () => {
+    setupEditWorkspace({
+      globalNamespace: GLOBAL_NAMESPACE,
+      workspaceNamespace: WORKSPACE_NAMESPACE,
+      initialVolumes: [],
+      initialSecrets: [],
+    });
+    cy.interceptApi(
+      'GET /api/:apiVersion/persistentvolumeclaims/:namespace',
+      { path: { apiVersion: NOTEBOOKS_API_VERSION, namespace: WORKSPACE_NAMESPACE } },
+      mockModArchResponse([buildMockPVC({ name: AVAILABLE_VOLUME })]),
+    ).as('listPVCsInWorkspaceNamespace');
+    cy.interceptApi(
+      'GET /api/:apiVersion/secrets/:namespace',
+      { path: { apiVersion: NOTEBOOKS_API_VERSION, namespace: WORKSPACE_NAMESPACE } },
+      mockModArchResponse([buildMockSecret({ name: AVAILABLE_SECRET })]),
+    ).as('listSecretsInWorkspaceNamespace');
+  };
+
+  const advanceToProperties = () => {
+    cy.wait('@getWorkspaceKinds');
+    editWorkspace.clickNext();
+    editWorkspace.advancePastRedirectModal();
+    editWorkspace.advancePastRedirectModal();
+  };
+
+  it('loads the Volume Attach modal using the workspace namespace, not the global namespace selector', () => {
+    setupWorkspaceNamespaceResources();
+    visitEditWorkspace();
+    advanceToProperties();
+
+    volumesManagement.expandVolumesSection();
+    volumesManagement.clickAttachExistingPVC();
+
+    cy.wait('@listPVCsInWorkspaceNamespace');
+    volumesAttachModal.assertModalVisible();
+    volumesAttachModal.assertPVCOptionAvailable(AVAILABLE_VOLUME);
+  });
+
+  it('loads the Secret Attach modal using the workspace namespace, not the global namespace selector', () => {
+    setupWorkspaceNamespaceResources();
+    visitEditWorkspace();
+    advanceToProperties();
+
+    secretsManagement.expandSecretsSection();
+    secretsManagement.clickAttachExistingSecrets();
+
+    cy.wait('@listSecretsInWorkspaceNamespace');
+    secretsAttachModal.assertModalVisible();
+    secretsAttachModal.assertSecretOptionAvailable(AVAILABLE_SECRET);
+  });
+
+  it('loads workspace resources when namespace listing returns 403', () => {
+    setupWorkspaceNamespaceResources();
+    cy.interceptApi(
+      'GET /api/:apiVersion/namespaces',
+      { path: { apiVersion: NOTEBOOKS_API_VERSION } },
+      { error: { code: '403', message: 'Forbidden' } },
+    ).as('namespaceListDenied');
+
+    editWorkspace.visitWithState({
+      namespace: WORKSPACE_NAMESPACE,
+      workspaceName: TEST_WORKSPACE_NAME,
+      workspaceKindName: WORKSPACE_KIND_NAME,
+    });
+    cy.wait('@namespaceListDenied');
+    advanceToProperties();
+
+    volumesManagement.expandVolumesSection();
+    volumesManagement.clickAttachExistingPVC();
+    cy.wait('@listPVCsInWorkspaceNamespace');
+    volumesAttachModal.assertPVCOptionAvailable(AVAILABLE_VOLUME);
+    volumesAttachModal.clickCancel();
+
+    secretsManagement.expandSecretsSection();
+    secretsManagement.clickAttachExistingSecrets();
+    cy.wait('@listSecretsInWorkspaceNamespace');
+    secretsAttachModal.assertSecretOptionAvailable(AVAILABLE_SECRET);
   });
 });

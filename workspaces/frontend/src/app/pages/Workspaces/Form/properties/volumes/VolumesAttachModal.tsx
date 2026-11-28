@@ -12,20 +12,24 @@ import { Popover } from '@patternfly/react-core/dist/esm/components/Popover';
 import { OutlinedQuestionCircleIcon } from '@patternfly/react-icons/dist/esm/icons/outlined-question-circle-icon';
 import { Form } from '@patternfly/react-core/dist/esm/components/Form';
 import { Switch } from '@patternfly/react-core/dist/esm/components/Switch';
+import { MenuToggleProps } from '@patternfly/react-core/dist/esm/components/MenuToggle';
 import { Stack, StackItem } from '@patternfly/react-core/dist/esm/layouts/Stack';
 import { TypeaheadSelect } from '@patternfly/react-templates';
-import { PvcsPVCListItem, V1PersistentVolumeAccessMode } from '~/generated/data-contracts';
+import { PvcsPVCListItem } from '~/generated/data-contracts';
 import ThemeAwareFormGroupWrapper from '~/shared/components/ThemeAwareFormGroupWrapper';
 import {
   normalizeMountPath,
   validateMountPath,
   getMountPathUniquenessError,
   buildPVCSelectOptions,
+  isPVCMountBlocked,
+  getBlockedMountTooltip,
+  getRWOInUseWarning,
+  hasOtherMountConflict,
 } from '~/app/pages/Workspaces/Form/helpers';
 import { MountPathField } from '~/app/pages/Workspaces/Form/MountPathField';
 import usePVCs from '~/app/hooks/usePVCs';
 import useStorageClasses from '~/app/hooks/useStorageClasses';
-import { useNamespaceSelectorWrapper } from '~/app/hooks/useNamespaceSelectorWrapper';
 import { LoadingSpinner } from '~/app/components/LoadingSpinner';
 
 const PVC_SELECT_EMPTY_KEY = 'pvc-select-empty';
@@ -34,36 +38,33 @@ export interface VolumesAttachModalProps {
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
   onAttach: (pvc: PvcsPVCListItem, mountPath: string, readOnly: boolean) => void;
+  namespace: string;
   /** Set of mount paths already in use across all attached volumes */
   mountedPaths: Set<string>;
   /**
    * When provided the mount path is locked to this value (sourced from the
-   * workspace kind's podTemplate.volumeMounts.home) and cannot be edited.
+   * workspace kind's podTemplate.volumeMountPaths.home) and cannot be edited.
    */
   fixedMountPath?: string;
   /** PVC names already mounted in the other volume section (home or data) */
   excludedPvcNames?: Set<string>;
+  currentWorkspaceName?: string;
 }
-
-const isRWO = (pvc: PvcsPVCListItem): boolean =>
-  pvc.pvcSpec.accessModes.includes(V1PersistentVolumeAccessMode.ReadWriteOnce) ||
-  pvc.pvcSpec.accessModes.includes(V1PersistentVolumeAccessMode.ReadWriteOncePod);
-
-const isInUse = (pvc: PvcsPVCListItem): boolean => pvc.pods.length > 0 || pvc.workspaces.length > 0;
 
 export const VolumesAttachModal: React.FC<VolumesAttachModalProps> = ({
   isOpen,
   setIsOpen,
   onAttach,
+  namespace,
   mountedPaths,
   fixedMountPath,
   excludedPvcNames,
+  currentWorkspaceName,
 }) => {
   // ── Data fetching ───────────────────────────────────────────────────────
 
-  const { pvcs: availablePVCs, pvcsLoaded, pvcLoadError, refreshPVCs } = usePVCs();
-  const { selectedNamespace } = useNamespaceSelectorWrapper();
-  const { storageClasses } = useStorageClasses(selectedNamespace);
+  const { pvcs: availablePVCs, pvcsLoaded, pvcLoadError, refreshPVCs } = usePVCs(namespace);
+  const { storageClasses } = useStorageClasses(namespace);
 
   // ── Form state ───────────────────────────────────────────────────────────
 
@@ -124,28 +125,44 @@ export const VolumesAttachModal: React.FC<VolumesAttachModalProps> = ({
     [availablePVCs, selectedPvcName],
   );
 
+  const isSelectedPvcBlocked = useMemo(
+    () => !!selectedPvc && isPVCMountBlocked(selectedPvc, currentWorkspaceName),
+    [selectedPvc, currentWorkspaceName],
+  );
+
   const inUseAlert = useMemo(() => {
-    if (!selectedPvc || !isInUse(selectedPvc)) {
+    if (!selectedPvc) {
       return null;
     }
-    if (isRWO(selectedPvc)) {
+    if (isPVCMountBlocked(selectedPvc, currentWorkspaceName)) {
       return {
         variant: AlertVariant.danger,
-        title: 'Volume is in use with ReadWriteOnce or ReadWriteOncePod access',
-        body: 'This volume uses ReadWriteOnce or ReadWriteOncePod access mode and is already mounted. Attaching it to this workspace may fail if it is scheduled on a different node.',
+        title: 'Volume cannot be attached',
+        body: `${getBlockedMountTooltip(selectedPvc, currentWorkspaceName) ?? 'This volume uses ReadWriteOncePod access mode and is already mounted by another pod or workspace.'} Detach it there before attaching it here.`,
       };
     }
-    return {
-      variant: AlertVariant.warning,
-      title: 'Volume is currently in use',
-      body: 'This volume is already mounted by other workspaces or pods. Verify that sharing is supported.',
-    };
-  }, [selectedPvc]);
+    const rwoWarning = getRWOInUseWarning(selectedPvc, currentWorkspaceName);
+    if (rwoWarning) {
+      return {
+        variant: AlertVariant.warning,
+        title: 'Node-scoped volume in use',
+        body: rwoWarning,
+      };
+    }
+    if (hasOtherMountConflict(selectedPvc, currentWorkspaceName)) {
+      return {
+        variant: AlertVariant.warning,
+        title: 'Volume is currently in use',
+        body: 'This volume is already mounted by other workspaces or pods. Verify that sharing is supported.',
+      };
+    }
+    return null;
+  }, [selectedPvc, currentWorkspaceName]);
 
   // ── Attach handler ───────────────────────────────────────────────────────
 
   const handleAttach = useCallback(() => {
-    if (!selectedPvc) {
+    if (!selectedPvc || isPVCMountBlocked(selectedPvc, currentWorkspaceName)) {
       return;
     }
     const trimmedPath = normalizeMountPath(mountPath);
@@ -154,13 +171,20 @@ export const VolumesAttachModal: React.FC<VolumesAttachModalProps> = ({
       return;
     }
     onAttach(selectedPvc, trimmedPath, readOnly);
-  }, [selectedPvc, mountPath, readOnly, mountedPaths, onAttach]);
+  }, [selectedPvc, mountPath, readOnly, mountedPaths, onAttach, currentWorkspaceName]);
 
   // ── Options ──────────────────────────────────────────────────────────────
 
   const initialOptions = useMemo(
-    () => buildPVCSelectOptions(availablePVCs, storageClasses, excludedPvcNames, selectedPvcName),
-    [availablePVCs, storageClasses, excludedPvcNames, selectedPvcName],
+    () =>
+      buildPVCSelectOptions(
+        availablePVCs,
+        storageClasses,
+        excludedPvcNames,
+        selectedPvcName,
+        currentWorkspaceName,
+      ),
+    [availablePVCs, storageClasses, excludedPvcNames, selectedPvcName, currentWorkspaceName],
   );
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -205,6 +229,9 @@ export const VolumesAttachModal: React.FC<VolumesAttachModalProps> = ({
                   <TypeaheadSelect
                     key={selectedPvcName || PVC_SELECT_EMPTY_KEY}
                     id="pvc-select"
+                    // MenuToggleProps doesn't type `data-testid`, but MenuToggle spreads unknown
+                    // props onto the underlying element, so it renders correctly.
+                    toggleProps={{ 'data-testid': 'pvc-select-toggle' } as MenuToggleProps}
                     initialOptions={initialOptions}
                     placeholder="Select a volume"
                     isScrollable
@@ -272,7 +299,8 @@ export const VolumesAttachModal: React.FC<VolumesAttachModalProps> = ({
             !selectedPvcName ||
             !mountPath.trim() ||
             !!mountPathError ||
-            isMountPathEditing
+            isMountPathEditing ||
+            isSelectedPvcBlocked
           }
           onClick={handleAttach}
           data-testid="attach-pvc-button"

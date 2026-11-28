@@ -41,6 +41,9 @@ class CreateWorkspaceKind {
   assertErrorAlertContainsMessage(message: string) {
     this.findErrorToast().should('contain.text', message);
   }
+  assertErrorToastContainsListItem(message: string) {
+    this.findErrorToast().find('li').should('contain.text', message);
+  }
 
   findFormPropertiesSection() {
     return cy.findByTestId('workspace-kind-form-properties');
@@ -83,6 +86,10 @@ class CreateWorkspaceKind {
   clickCancel() {
     this.findCancelButton().click();
     return this;
+  }
+
+  assertProbeDependencyError(visible: boolean) {
+    cy.findByTestId('activity-probe-dependency-error').should(visible ? 'be.visible' : 'not.exist');
   }
 
   assertSubmitButtonEnabled() {

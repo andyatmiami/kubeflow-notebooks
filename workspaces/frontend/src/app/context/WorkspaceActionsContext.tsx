@@ -5,7 +5,6 @@ import {
   DrawerContentBody,
 } from '@patternfly/react-core/dist/esm/components/Drawer';
 import { useNotification } from 'mod-arch-core';
-import { useNamespaceSelectorWrapper } from '~/app/hooks/useNamespaceSelectorWrapper';
 import { useNotebookAPI } from '~/app/hooks/useNotebookAPI';
 import { WorkspaceDetails } from '~/app/pages/Workspaces/Details/WorkspaceDetails';
 import { useTypedNavigate } from '~/app/routerHelper';
@@ -14,6 +13,7 @@ import { WorkspaceStartActionModal } from '~/app/pages/Workspaces/workspaceActio
 import { WorkspaceStopActionModal } from '~/app/pages/Workspaces/workspaceActions/WorkspaceStopActionModal';
 import { WorkspacesRedirectStep, WorkspacesWorkspaceListItem } from '~/generated/data-contracts';
 import { NotebookApis } from '~/shared/api/notebookApi';
+import { buildWorkspaceUpdatePayload } from '~/shared/api/workspacePayloads';
 
 const resolveRedirectTargetId = (
   redirectChain: WorkspacesRedirectStep[] | undefined,
@@ -40,17 +40,19 @@ const updateWorkspaceWithRedirects = async (args: {
   const workspaceEnvelope = await api.workspaces.getWorkspace(namespace, workspace.name);
   const currentState = workspaceEnvelope.data;
   await api.workspaces.updateWorkspace(namespace, workspace.name, {
-    data: {
+    data: buildWorkspaceUpdatePayload({
+      displayName: currentState.displayName,
       paused,
       podTemplate: {
-        ...currentState.podTemplate,
+        podMetadata: currentState.podTemplate.podMetadata,
+        volumes: currentState.podTemplate.volumes,
         options: {
           imageConfig: imageRedirectTargetId ?? currentState.podTemplate.options.imageConfig,
           podConfig: podRedirectTargetId ?? currentState.podTemplate.options.podConfig,
         },
       },
       revision: currentState.revision,
-    },
+    }),
   });
 };
 
@@ -103,7 +105,6 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
   const navigate = useTypedNavigate();
   const notification = useNotification();
   const { api } = useNotebookAPI();
-  const { selectedNamespace } = useNamespaceSelectorWrapper();
   const [activeWsAction, setActiveWsAction] = useState<WorkspaceAction | null>(null);
 
   const drawerContent = (
@@ -156,10 +157,11 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
     }
 
     const workspaceName = activeWsAction.workspace.name;
-    await api.workspaces.deleteWorkspace(selectedNamespace, workspaceName);
+    const workspaceNamespace = activeWsAction.workspace.namespace;
+    await api.workspaces.deleteWorkspace(workspaceNamespace, workspaceName);
     notification.info(`Workspace '${workspaceName}' deleted successfully`);
     activeWsAction.onActionDone?.();
-  }, [api, selectedNamespace, activeWsAction, notification]);
+  }, [api, activeWsAction, notification]);
 
   useEffect(() => {
     if (!activeWsAction) {
@@ -225,7 +227,7 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
                     workspace={activeWsAction.workspace}
                     onStart={async () =>
                       api.workspaces.updateWorkspacePauseState(
-                        selectedNamespace,
+                        activeWsAction.workspace.namespace,
                         activeWsAction.workspace.name,
                         {
                           data: { paused: false },
@@ -236,7 +238,7 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
                     onUpdateAndStart={async () => {
                       await updateWorkspaceWithRedirects({
                         api,
-                        namespace: selectedNamespace,
+                        namespace: activeWsAction.workspace.namespace,
                         workspace: activeWsAction.workspace,
                         paused: false,
                       });
@@ -250,7 +252,7 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
                     workspace={activeWsAction.workspace}
                     onStop={async () =>
                       api.workspaces.updateWorkspacePauseState(
-                        selectedNamespace,
+                        activeWsAction.workspace.namespace,
                         activeWsAction.workspace.name,
                         {
                           data: { paused: true },
@@ -261,7 +263,7 @@ export const WorkspaceActionsContextProvider: React.FC<WorkspaceActionsContextPr
                     onUpdateAndStop={async () => {
                       await updateWorkspaceWithRedirects({
                         api,
-                        namespace: selectedNamespace,
+                        namespace: activeWsAction.workspace.namespace,
                         workspace: activeWsAction.workspace,
                         paused: true,
                       });

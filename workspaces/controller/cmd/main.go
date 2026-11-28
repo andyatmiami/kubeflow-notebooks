@@ -19,22 +19,24 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	"net/http"
 	"os"
 	"strconv"
 
-	corev1 "k8s.io/api/core/v1"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
+	"go.uber.org/zap/zapcore"
 	istiov1 "istio.io/client-go/pkg/apis/networking/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// to ensure that exec-entrypoint and run can make use of them.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -66,6 +68,7 @@ func init() {
 }
 
 func main() {
+	var debugMode bool
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
@@ -76,6 +79,8 @@ func main() {
 	// Define command line flags
 	cfg := &config.EnvConfig{}
 
+	flag.BoolVar(&debugMode, "debug-mode", getEnvAsBool("DEBUG_MODE", false),
+		"Enable development mode. Increases logging verbosity.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -100,13 +105,28 @@ func main() {
 		"QPS configuration passed to the Kubernetes API client (rest.Config).")
 	flag.IntVar(&cfg.ClientBurst, "client-burst", getEnvAsInt("CLIENT_BURST", 100),
 		"Maximum Burst configuration passed to the Kubernetes API client (rest.Config).")
+	flag.BoolVar(&cfg.WatchWarningEvents, "watch-warning-events", getEnvAsBool("WATCH_WARNING_EVENTS", true),
+		"Enable watching Kubernetes Warning Events for owned Pods and StatefulSets. "+
+			"Disabling this stops the controller from caching every Warning Event in the cluster "+
+			"(which is unbounded during an event storm), at the cost of Workspaces taking longer to "+
+			"report an Error state. Warning Events are still reported in `status.stateMessage`.")
 
-	opts := zap.Options{
-		Development: true,
-	}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	// Calculate the log level
+	zapLogLevelSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "zap-log-level" {
+			zapLogLevelSet = true
+		}
+	})
+	if debugMode && !zapLogLevelSet {
+		opts.Level = zapcore.Level(-2)
+	}
+
+	// Initialize the logger
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
@@ -144,41 +164,68 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
-		Scheme: scheme,
-		Client: client.Options{
-			Cache: &client.CacheOptions{
-				// Disable caching for ConfigMaps and Secrets as caching all of them can take a LOT of memory in a large cluster.
-				// We create special caches that are filtered by label selectors (e.g. the image source ConfigMaps).
-				// REFERENCE: https://github.com/kubernetes-sigs/controller-runtime/issues/244#issuecomment-2466564541
-				DisableFor: []client.Object{
-					&corev1.ConfigMap{},
-					&corev1.Secret{},
-				},
+	// build the client options for the manager
+	clientOpts := client.Options{
+		Cache: &client.CacheOptions{
+			// Disable caching for ConfigMaps and Secrets as caching all of them can take a LOT of memory in a large cluster.
+			// We create special caches that are filtered by label selectors (e.g. the image source ConfigMaps).
+			// REFERENCE: https://github.com/kubernetes-sigs/controller-runtime/issues/244#issuecomment-2466564541
+			DisableFor: []client.Object{
+				&corev1.ConfigMap{},
+				&corev1.Secret{},
 			},
 		},
+		FieldOwner: helper.ControllerFieldOwner,
+	}
+
+	// build the cache options for the manager
+	cacheOpts := cache.Options{}
+
+	if cfg.WatchWarningEvents {
+		//
+		// TODO: create two separate caches for Warning events so that we can process less total events:
+		//        1. Warning events with involvedObject.kind=Pod and involvedObject.apiVersion=v1
+		//        2. Warning events with involvedObject.kind=StatefulSet and involvedObject.apiVersion=apps/v1
+		//       NOTE: we will need to index each event by only involved objects of the correct
+		//             type so we can list them efficiently
+		//
+		cacheOpts.ByObject = map[client.Object]cache.ByObject{
+			&corev1.Event{}: {
+				// Filter to only Warning type events.
+				Field: fields.OneTermEqualSelector("type", corev1.EventTypeWarning),
+				// Drop the parts of each Event we never read before it is stored in the cache.
+				// This cache holds every Warning Event in the cluster (client-side predicates filter
+				// event *delivery*, not cache *contents*), so shrinking each entry directly shrinks
+				// the worst-case memory usage during an event storm.
+				Transform: helper.StripEventForCache,
+			},
+		}
+	} else {
+		// The Event cache is cluster-wide and its size is bounded only by the API server's
+		// `--event-ttl` (1 hour by default), so an event storm in ANY namespace can grow it without
+		// limit. When warning event watching is disabled, we therefore avoid caching Events
+		// entirely: no watch is registered (see `SetupWithManager`), no field index is registered
+		// (see `SetupManagerFieldIndexers`), and reads are sent straight to the API server.
+		// Workspace state is still derived from Warning Events, it just requires a reconcile to be
+		// triggered by something other than the Event itself (e.g. a Pod update or a requeue).
+		clientOpts.Cache.DisableFor = append(clientOpts.Cache.DisableFor, &corev1.Event{})
+	}
+	setupLog.Info("configured Warning Event watching", "enabled", cfg.WatchWarningEvents)
+
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+		Scheme: scheme,
+		Client: clientOpts,
+		Cache:  cacheOpts,
 		Metrics: metricsserver.Options{
 			BindAddress:   metricsAddr,
 			SecureServing: secureMetrics,
 			TLSOpts:       tlsOpts,
 		},
-		WebhookServer:          webhookServer,
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "kubeflow-workspace-controller",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		//
-		// TODO: check if we are doing anything which would prevent us from using this option.
-		// LeaderElectionReleaseOnCancel: true,
+		WebhookServer:                 webhookServer,
+		HealthProbeBindAddress:        probeAddr,
+		LeaderElection:                enableLeaderElection,
+		LeaderElectionID:              "kubeflow-workspaces-controller",
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -199,9 +246,6 @@ func main() {
 		PodExecutor: &helper.RemoteCommandExecutor{
 			Clientset:  clientset,
 			RestConfig: restConfig,
-		},
-		HTTPProber: &helper.DefaultHTTPProber{
-			Client: &http.Client{},
 		},
 	}).SetupWithManager(mgr, &controller.Options{
 		RateLimiter: helper.BuildRateLimiter(),

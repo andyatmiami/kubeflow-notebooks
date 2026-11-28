@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -32,7 +33,14 @@ import (
 )
 
 const (
-	IndexEventInvolvedObjectUidField            = ".involvedObject.uid"
+	// IndexEventInvolvedObjectUidField is the index for the `involvedObject.uid` field of `v1.Event`
+	// NOTE: this index does not have a leading dot because it needs to be a valid field selector key,
+	//       for when `--watch-warning-events` is disabled and Events are read directly from the API server
+	//       instead of the cache, meaning this field will be passed to the API server as a field selector
+	//       https://kubernetes.io/docs/concepts/overview/working-with-objects/field-selectors/#supported-fields
+	IndexEventInvolvedObjectUidField = "involvedObject.uid"
+
+	IndexWorkspaceOwnedResourceUIDField         = ".status.ownedResourceUIDs"
 	IndexWorkspaceOwnerField                    = ".metadata.controller"
 	IndexWorkspaceKindField                     = ".spec.kind"
 	IndexWorkspaceKindConfigMapImageSourceField = ".spec.configMapImageSource"
@@ -40,33 +48,73 @@ const (
 	OwnerKindWorkspace = "Workspace"
 )
 
+// isWorkspaceControllerRef reports whether the given owner reference points to a
+// Workspace in the kubeflow.org API group. Version is intentionally ignored so
+// this predicate is stable across CRD version promotions (see issue#1198).
+func isWorkspaceControllerRef(ref *metav1.OwnerReference) bool {
+	if ref == nil {
+		return false
+	}
+	ownerGV, err := schema.ParseGroupVersion(ref.APIVersion)
+	if err != nil {
+		return false
+	}
+	return ownerGV.Group == kubefloworgv1beta1.GroupVersion.Group && ref.Kind == OwnerKindWorkspace
+}
+
+// indexWorkspaceOwner returns the name of the Workspace that is the controller owner of the object,
+// or nil if the object is not controlled by a Workspace.
+func indexWorkspaceOwner(rawObj client.Object) []string {
+	owner := metav1.GetControllerOf(rawObj)
+	if owner == nil || !isWorkspaceControllerRef(owner) {
+		return nil
+	}
+	return []string{owner.Name}
+}
+
+// indexWorkspaceOwnedResourceUIDs returns the UIDs of the owned Pod and StatefulSet from Workspace status
+func indexWorkspaceOwnedResourceUIDs(rawObj client.Object) []string {
+	ws, ok := rawObj.(*kubefloworgv1beta1.Workspace)
+	if !ok {
+		return nil
+	}
+	uids := make([]string, 0, 2)
+	if uid := ws.Status.PodTemplatePod.UID; uid != "" {
+		uids = append(uids, string(uid))
+	}
+	if uid := ws.Status.PodTemplateStatefulSet.UID; uid != "" {
+		uids = append(uids, string(uid))
+	}
+	return uids
+}
+
 // indexByWorkspaceOwner indexes the given object type under `IndexWorkspaceOwnerField`,
 // by the name of the Workspace which is its controller owner
 func indexByWorkspaceOwner(mgr ctrl.Manager, obj client.Object) error {
-	return mgr.GetFieldIndexer().IndexField(context.Background(), obj, IndexWorkspaceOwnerField, func(rawObj client.Object) []string {
-		owner := metav1.GetControllerOf(rawObj)
-		if owner == nil {
-			return nil
-		}
-		if owner.APIVersion != kubefloworgv1beta1.GroupVersion.String() || owner.Kind != OwnerKindWorkspace {
-			return nil
-		}
-		return []string{owner.Name}
-	})
+	return mgr.GetFieldIndexer().IndexField(context.Background(), obj, IndexWorkspaceOwnerField, indexWorkspaceOwner)
 }
 
 // SetupManagerFieldIndexers sets up field indexes on a controller-runtime manager
 func SetupManagerFieldIndexers(mgr ctrl.Manager, cfg *config.EnvConfig) error {
 
-	// Index Event by `involvedObject.uid`
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Event{}, IndexEventInvolvedObjectUidField, func(rawObj client.Object) []string {
-		event := rawObj.(*corev1.Event)
-		if event.InvolvedObject.UID == "" {
-			return nil
+	// Index Event by `involvedObject.uid` (only when warning event watching is enabled)
+	//
+	// WARNING: `IndexField()` calls `GetInformer()` under the hood, so merely registering this index
+	//          creates (and starts) a cluster-wide Event informer, even if nothing ever watches or
+	//          Lists Events through the cache. That informer caches every Warning Event in the
+	//          cluster, which is unbounded during an event storm, so it must stay gated behind the
+	//          `--watch-warning-events` flag. When disabled, Events are read directly from the API
+	//          server instead (see the `DisableFor` client option in `cmd/main.go`).
+	if cfg != nil && cfg.WatchWarningEvents {
+		if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Event{}, IndexEventInvolvedObjectUidField, func(rawObj client.Object) []string {
+			event := rawObj.(*corev1.Event)
+			if event.InvolvedObject.UID == "" {
+				return nil
+			}
+			return []string{string(event.InvolvedObject.UID)}
+		}); err != nil {
+			return err
 		}
-		return []string{string(event.InvolvedObject.UID)}
-	}); err != nil {
-		return err
 	}
 
 	// Index StatefulSet by its owner Workspace
@@ -90,7 +138,7 @@ func SetupManagerFieldIndexers(mgr ctrl.Manager, cfg *config.EnvConfig) error {
 	}
 
 	// Index VirtualService by its owner Workspace (only when Istio is enabled)
-	if cfg.UseIstio {
+	if cfg != nil && cfg.UseIstio {
 		if err := indexByWorkspaceOwner(mgr, &istiov1.VirtualService{}); err != nil {
 			return err
 		}
@@ -104,6 +152,11 @@ func SetupManagerFieldIndexers(mgr ctrl.Manager, cfg *config.EnvConfig) error {
 		}
 		return []string{ws.Spec.Kind}
 	}); err != nil {
+		return err
+	}
+
+	// Index Workspace by owned Pod and StatefulSet UIDs
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kubefloworgv1beta1.Workspace{}, IndexWorkspaceOwnedResourceUIDField, indexWorkspaceOwnedResourceUIDs); err != nil {
 		return err
 	}
 

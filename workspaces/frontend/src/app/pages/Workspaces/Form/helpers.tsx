@@ -1,4 +1,5 @@
 import React from 'react';
+import { generate as generateRandomWords } from 'random-words';
 import { Alert, AlertVariant } from '@patternfly/react-core/dist/esm/components/Alert';
 import { Label, LabelGroup } from '@patternfly/react-core/dist/esm/components/Label';
 import { Flex, FlexItem } from '@patternfly/react-core/dist/esm/layouts/Flex';
@@ -8,13 +9,16 @@ import { InfoCircleIcon } from '@patternfly/react-icons/dist/esm/icons/info-circ
 import { CubeIcon } from '@patternfly/react-icons/dist/esm/icons/cube-icon';
 import { TypeaheadSelectOption } from '@patternfly/react-templates';
 import {
+  PvcsPodInfo,
   PvcsPVCListItem,
   StorageclassesStorageClassListItem,
   V1PersistentVolumeAccessMode,
+  V1PodPhase,
 } from '~/generated/data-contracts';
 import { LabelGroupWithTooltip } from '~/app/components/LabelGroupWithTooltip';
 
 export const MAX_WORKSPACE_NAME_LENGTH = 63;
+export const MAX_DISPLAY_NAME_LENGTH = 128;
 // 420 decimal = 0644 octal (standard file permissions)
 export const DEFAULT_MODE = 420;
 export const DEFAULT_MODE_OCTAL = DEFAULT_MODE.toString(8);
@@ -138,28 +142,105 @@ export const getUnmountableTooltip = (pvc: PvcsPVCListItem): string | null => {
   return null;
 };
 
+// The Kubernetes PVC API can retain references to Pods in terminal phases (Succeeded, Failed)
+// even after they have released the volume mount. Only active Pods block RWOP reuse.
+// Unknown phases are treated conservatively as active to avoid masking real conflicts.
+const isActivePod = (pod: PvcsPodInfo): boolean =>
+  pod.phase !== V1PodPhase.PodSucceeded && pod.phase !== V1PodPhase.PodFailed;
+
+// Returns the first conflicting workspace or active Pod that is not the current workspace's own Pod,
+// or null when there is no conflict.
+const findOtherMountConflict = (
+  pvc: PvcsPVCListItem,
+  currentWorkspaceName?: string,
+): { otherWorkspaceName: string | undefined; otherPodName: string | undefined } | null => {
+  const ownPodName = pvc.workspaces.find((ws) => ws.name === currentWorkspaceName)?.podTemplatePod
+    ?.name;
+  const otherWorkspace = pvc.workspaces.find((ws) => ws.name !== currentWorkspaceName);
+  const otherPod = pvc.pods.find((pod) => pod.name !== ownPodName && isActivePod(pod));
+  if (!otherWorkspace && !otherPod) {
+    return null;
+  }
+  return { otherWorkspaceName: otherWorkspace?.name, otherPodName: otherPod?.name };
+};
+
+export const hasOtherMountConflict = (
+  pvc: PvcsPVCListItem,
+  currentWorkspaceName?: string,
+): boolean => findOtherMountConflict(pvc, currentWorkspaceName) !== null;
+
+export const isPVCMountBlocked = (pvc: PvcsPVCListItem, currentWorkspaceName?: string): boolean => {
+  if (!pvc.pvcSpec.accessModes.includes(V1PersistentVolumeAccessMode.ReadWriteOncePod)) {
+    return false;
+  }
+  return findOtherMountConflict(pvc, currentWorkspaceName) !== null;
+};
+
+export const getBlockedMountTooltip = (
+  pvc: PvcsPVCListItem,
+  currentWorkspaceName?: string,
+): string | null => {
+  if (!pvc.pvcSpec.accessModes.includes(V1PersistentVolumeAccessMode.ReadWriteOncePod)) {
+    return null;
+  }
+  const conflict = findOtherMountConflict(pvc, currentWorkspaceName);
+  if (!conflict) {
+    return null;
+  }
+  if (conflict.otherWorkspaceName) {
+    return `This volume uses ReadWriteOncePod access and is already mounted by workspace "${conflict.otherWorkspaceName}".`;
+  }
+  if (conflict.otherPodName) {
+    return `This volume uses ReadWriteOncePod access and is already mounted by pod "${conflict.otherPodName}".`;
+  }
+  return 'This volume uses ReadWriteOncePod access and is already mounted by another pod or workspace.';
+};
+
+/**
+ * Returns a warning message when a ReadWriteOnce PVC is in use by another workspace or active Pod.
+ * RWO is node-scoped: multiple Pods on the same node may share it, but Pods on different
+ * nodes cannot mount it read-write simultaneously. The PVC is not blocked — it remains
+ * selectable — but users should be aware of this constraint.
+ * Terminal Pods (Succeeded, Failed) do not trigger the warning.
+ */
+export const getRWOInUseWarning = (
+  pvc: PvcsPVCListItem,
+  currentWorkspaceName?: string,
+): string | null => {
+  if (!pvc.pvcSpec.accessModes.includes(V1PersistentVolumeAccessMode.ReadWriteOnce)) {
+    return null;
+  }
+  if (!findOtherMountConflict(pvc, currentWorkspaceName)) {
+    return null;
+  }
+  return 'ReadWriteOnce (RWO) volumes support read-write access from one node at a time. Multiple Pods on that node can share this volume. Using it from workspaces scheduled on different nodes may cause mount failures.';
+};
+
 export const buildPVCOptionDescription = (
   pvc: PvcsPVCListItem,
   excludedPvcNames?: Set<string>,
+  currentWorkspaceName?: string,
 ): React.ReactNode => {
   const isExcluded = excludedPvcNames?.has(pvc.name) ?? false;
+  const isBlocked = isPVCMountBlocked(pvc, currentWorkspaceName);
+  const isDimmed = !pvc.canMount || isExcluded || isBlocked;
   return (
-    <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }}>
+    <Flex
+      justifyContent={{ default: 'justifyContentSpaceBetween' }}
+      data-testid={`pvc-option-${pvc.name}`}
+    >
       <FlexItem>
         <Stack style={{ width: '100%' }}>
           <StackItem>
             <LabelGroup numLabels={5}>
-              <Label
-                isCompact
-                className={!pvc.canMount || isExcluded ? 'pf-m-disabled' : undefined}
-              >
+              <Label isCompact className={isDimmed ? 'pf-m-disabled' : undefined}>
                 {pvc.pvcSpec.requests.storage}
               </Label>
               {pvc.pvcSpec.accessModes.map((mode) => (
                 <Label
                   key={mode}
                   isCompact
-                  className={!pvc.canMount || isExcluded ? 'pf-m-disabled' : undefined}
+                  className={isDimmed ? 'pf-m-disabled' : undefined}
                   color="blue"
                 >
                   {mode}
@@ -189,7 +270,7 @@ export const buildPVCOptionDescription = (
                     icon={<CubeIcon color="teal" />}
                     isCompact
                     color="teal"
-                    className={!pvc.canMount || isExcluded ? 'pf-m-disabled' : undefined}
+                    className={isDimmed ? 'pf-m-disabled' : undefined}
                   />
                 </FlexItem>
               </Flex>
@@ -222,6 +303,7 @@ export const buildPVCSelectOptions = (
   storageClasses: StorageclassesStorageClassListItem[],
   excludedPvcNames?: Set<string>,
   selectedPvcName?: string,
+  currentWorkspaceName?: string,
 ): TypeaheadSelectOption[] => {
   const scMap = new Map(storageClasses.map((s) => [s.name, s]));
   const grouped = new Map<
@@ -253,28 +335,52 @@ export const buildPVCSelectOptions = (
     });
 
     const sorted = [...pvcs].sort((a, b) => {
-      const aDisabled = !a.canMount || (excludedPvcNames?.has(a.name) ?? false);
-      const bDisabled = !b.canMount || (excludedPvcNames?.has(b.name) ?? false);
+      const aDisabled =
+        !a.canMount ||
+        (excludedPvcNames?.has(a.name) ?? false) ||
+        isPVCMountBlocked(a, currentWorkspaceName);
+      const bDisabled =
+        !b.canMount ||
+        (excludedPvcNames?.has(b.name) ?? false) ||
+        isPVCMountBlocked(b, currentWorkspaceName);
       return Number(aDisabled) - Number(bDisabled);
     });
 
     for (const pvc of sorted) {
-      const isDisabled = !pvc.canMount || (excludedPvcNames?.has(pvc.name) ?? false);
-      const tooltip = getUnmountableTooltip(pvc);
+      const isExcluded = excludedPvcNames?.has(pvc.name) ?? false;
+      const isDisabled =
+        !pvc.canMount || isExcluded || isPVCMountBlocked(pvc, currentWorkspaceName);
+      const tooltip =
+        getUnmountableTooltip(pvc) ??
+        (isExcluded ? null : getBlockedMountTooltip(pvc, currentWorkspaceName));
       options.push({
         content: pvc.name,
         value: pvc.name,
         isDisabled: isDisabled && !tooltip,
         isAriaDisabled: isDisabled && !!tooltip,
         selected: pvc.name === selectedPvcName,
-        description: buildPVCOptionDescription(pvc, excludedPvcNames),
-        ...(tooltip ? { tooltipProps: { content: tooltip } } : {}),
+        description: buildPVCOptionDescription(pvc, excludedPvcNames, currentWorkspaceName),
+        ...(tooltip
+          ? {
+              tooltipProps: {
+                content: <span data-testid={`pvc-option-tooltip-${pvc.name}`}>{tooltip}</span>,
+              },
+            }
+          : {}),
       });
     }
   }
 
   return options;
 };
+
+// Workspace names are restricted to DNS-1123 *labels* (no "."), not subdomains: the
+// controller uses the name as a label value and inside child resource generateNames
+// (e.g. Services, which must be DNS-1035 labels), so a dotted name is accepted by the
+// API but can never be reconciled. This is a frontend-only guard until the backend,
+// webhook and CRD enforce the same rule.
+const RESOURCE_NAME_CHARS_REGEX = /^[a-z0-9-]+$/;
+const RESOURCE_NAME_CHARS_MESSAGE = 'Only lowercase alphanumeric characters or "-" are allowed';
 
 export const validateName = (name: string): string | null => {
   if (!name) {
@@ -285,8 +391,8 @@ export const validateName = (name: string): string | null => {
     return `Must be no more than ${MAX_WORKSPACE_NAME_LENGTH} characters`;
   }
 
-  if (!/^[a-z0-9.-]+$/.test(name)) {
-    return 'Only lowercase alphanumeric characters, "-" or "." are allowed';
+  if (!RESOURCE_NAME_CHARS_REGEX.test(name)) {
+    return RESOURCE_NAME_CHARS_MESSAGE;
   }
 
   if (!/^[a-z0-9]/.test(name)) {
@@ -296,5 +402,124 @@ export const validateName = (name: string): string | null => {
   if (!/[a-z0-9]$/.test(name)) {
     return 'Must end with an alphanumeric character';
   }
+
   return null;
+};
+
+export interface ResourceNameCriterion {
+  key: string;
+  label: string;
+  isValid: boolean;
+}
+
+/** Same rules as validateName, decomposed into individually-checkable criteria for live UI feedback. */
+export const getResourceNameCriteria = (name: string): ResourceNameCriterion[] => [
+  {
+    key: 'length',
+    label: `Must be no more than ${MAX_WORKSPACE_NAME_LENGTH} characters`,
+    isValid: name.length > 0 && name.length <= MAX_WORKSPACE_NAME_LENGTH,
+  },
+  {
+    key: 'chars',
+    label: RESOURCE_NAME_CHARS_MESSAGE,
+    isValid: RESOURCE_NAME_CHARS_REGEX.test(name),
+  },
+  {
+    key: 'start',
+    label: 'Must start with an alphanumeric character',
+    isValid: /^[a-z0-9]/.test(name),
+  },
+  {
+    key: 'end',
+    label: 'Must end with an alphanumeric character',
+    isValid: /[a-z0-9]$/.test(name),
+  },
+];
+
+// Unicode letters/marks/numbers (any language/script) plus a curated set of
+// everyday punctuation.
+// (< > { } ` \ | ; & $ = [ ]) — nothing needs special-casing for those since
+// they simply aren't in this allowlist. Whitespace is a literal space
+// (U+0020) only — not tabs, newlines, or other Unicode spaces.
+const DISPLAY_NAME_ALLOWED_CHARS_REGEX = /^[\p{L}\p{M}\p{N}\-_.,'":?!@#%^*()~+/ ]*$/u;
+const DISPLAY_NAME_ALLOWED_CHARS_MESSAGE =
+  'Only letters (any language), numbers, spaces, and the characters - _ . , \' " : ? ! @ # % ^ * ( ) ~ + / are allowed';
+
+export const validateDisplayName = (displayName: string): string | null => {
+  if (!displayName.trim()) {
+    return 'Value is required';
+  }
+
+  if (displayName.length > MAX_DISPLAY_NAME_LENGTH) {
+    return `Must be no more than ${MAX_DISPLAY_NAME_LENGTH} characters`;
+  }
+
+  if (!DISPLAY_NAME_ALLOWED_CHARS_REGEX.test(displayName)) {
+    return DISPLAY_NAME_ALLOWED_CHARS_MESSAGE;
+  }
+
+  return null;
+};
+
+/**
+ * Converts a display name into a lowercase, hyphen-separated slug. Accented Latin
+ * letters are transliterated to their plain-ASCII base letter via Unicode NFD
+ * decomposition (e.g. "café" becomes "cafe", not "caf") before anything else is
+ * dropped. Any remaining characters outside [0-9, a-Z, -, ., _, space] — including
+ * non-Latin scripts (e.g. Chinese, Cyrillic), symbols, and emoji — are removed
+ * rather than romanized; such display names fall back to the random word-pair
+ * generator in generateResourceNameBase. Everything is lower-cased, spaces,
+ * underscores and dots become dashes (resource names must not contain "."), and
+ * leading/trailing "-" are trimmed so the slug is more likely to already satisfy
+ * validateName's start/end rule.
+ */
+export const slugifyDisplayName = (displayName: string): string =>
+  displayName
+    .normalize('NFD') // Decompose accented Latin letters into base letter + combining mark
+    .replace(/[\u0300-\u036f]/g, '') // Strip the combining marks, leaving the plain base letter
+    .replace(/[^0-9a-zA-Z\-._ ]/g, '') // Drop anything else: non-Latin scripts, symbols, emoji
+    .toLowerCase()
+    .replace(/[ _.]/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const RESOURCE_NAME_HASH_LENGTH = 4;
+const RESOURCE_NAME_HASH_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+export const generateRandomHash = (length = RESOURCE_NAME_HASH_LENGTH): string => {
+  let hash = '';
+  for (let i = 0; i < length; i += 1) {
+    hash += RESOURCE_NAME_HASH_CHARS[Math.floor(Math.random() * RESOURCE_NAME_HASH_CHARS.length)];
+  }
+  return hash;
+};
+
+const RANDOM_WORD_MIN_LENGTH = 5;
+const RANDOM_WORD_MAX_LENGTH = 7;
+
+/**
+ * Returns a domain-friendly base name derived from the display name when it converts into
+ * a valid resource name, otherwise falls back to a random "<word>-<word>" base
+ * (e.g. when the display name has no alphanumeric characters at all, like an emoji-only name).
+ */
+export const generateResourceNameBase = (displayName: string): string => {
+  const slug = slugifyDisplayName(displayName);
+  if (slug && validateName(slug) === null) {
+    return slug;
+  }
+
+  const [word1, word2] = generateRandomWords({
+    exactly: 2,
+    minLength: RANDOM_WORD_MIN_LENGTH,
+    maxLength: RANDOM_WORD_MAX_LENGTH,
+  }) as string[];
+
+  return `${word1}-${word2}`;
+};
+
+export const generateResourceName = (displayName: string): string => {
+  const base = generateResourceNameBase(displayName);
+  const hash = generateRandomHash();
+  const maxBaseLength = MAX_WORKSPACE_NAME_LENGTH - hash.length - 1;
+  const truncatedBase = base.slice(0, maxBaseLength).replace(/-+$/, '');
+  return `${truncatedBase}-${hash}`;
 };
